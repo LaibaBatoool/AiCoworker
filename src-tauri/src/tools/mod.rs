@@ -6,3 +6,4 @@ pub mod pdf_images;
 pub mod write_file;
 pub mod convert_to_pdf;
 pub mod edit_file;
+pub mod delete_file;

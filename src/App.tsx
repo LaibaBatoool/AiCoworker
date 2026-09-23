@@ -21,6 +21,10 @@ function App() {
   const [newText, setNewText] = useState("");
   const [editStatus, setEditStatus] = useState("");
 
+  const [deleteFilePath, setDeleteFilePath] = useState("");
+  const [deleteRecursive, setDeleteRecursive] = useState(false);
+  const [deleteStatus, setDeleteStatus] = useState("");
+
   async function handleReadFile() {
     try {
       const result = await invoke<string>("read_file_tool", {
@@ -105,6 +109,30 @@ function App() {
       setEditStatus(`Successfully edited "${editFilePath}".`);
     } catch (err) {
       setEditStatus(`Error: ${err}`);
+    }
+  }
+
+  async function handleDeleteFile() {
+    const typed = window.prompt(
+      `PRIVILEGED ACTION — this cannot be undone.\n\nThe agent wants to DELETE "${deleteFilePath}"${
+        deleteRecursive ? " (and everything inside it, if it's a folder)" : ""
+      }.\n\nType the exact file/folder name to confirm:`
+    );
+
+    if (typed !== deleteFilePath) {
+      setDeleteStatus("Delete cancelled — confirmation text did not match.");
+      return;
+    }
+
+    try {
+      await invoke("delete_file_tool", {
+        workspaceRoot,
+        relativePath: deleteFilePath,
+        recursive: deleteRecursive,
+      });
+      setDeleteStatus(`Successfully deleted "${deleteFilePath}".`);
+    } catch (err) {
+      setDeleteStatus(`Error: ${err}`);
     }
   }
 
@@ -197,6 +225,26 @@ function App() {
       />
       <button onClick={handleEditFile}>Edit File</button>
       <p style={{ marginTop: "0.5rem" }}>{editStatus}</p>
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3 style={{ color: "#b00020" }}>Delete File/Folder (privileged — type name to confirm)</h3>
+      <input
+        placeholder="Relative path to delete (e.g. old-test.txt or old-folder)"
+        value={deleteFilePath}
+        onChange={(e) => setDeleteFilePath(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <label style={{ display: "block", marginBottom: "0.5rem" }}>
+        <input
+          type="checkbox"
+          checked={deleteRecursive}
+          onChange={(e) => setDeleteRecursive(e.target.checked)}
+        />
+        {" "}Recursive (required for non-empty folders)
+      </label>
+      <button onClick={handleDeleteFile} style={{ color: "#b00020" }}>Delete</button>
+      <p style={{ marginTop: "0.5rem" }}>{deleteStatus}</p>
     </div>
   );
 }
