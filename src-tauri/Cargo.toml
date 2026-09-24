@@ -29,6 +29,7 @@ zip = "8.6.0"
 lopdf = "0.45.0"
 image = "0.25.10"
 docx-rs = "0.4.22"
+wait-timeout = "0.2.1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

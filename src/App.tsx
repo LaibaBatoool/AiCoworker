@@ -1,6 +1,27 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+interface CommandOutput {
+  risk_level: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+  timed_out: boolean;
+}
+
+interface SearchResult {
+  relative_path: string;
+  matched_on: string;
+}
+
+interface FileMetadata {
+  relative_path: string;
+  size_bytes: number;
+  is_directory: boolean;
+  modified_unix_timestamp: number | null;
+  read_only: boolean;
+}
+
 function App() {
   const [dirPath, setDirPath] = useState("");
   const [dirEntries, setDirEntries] = useState<{ name: string; is_directory: boolean }[]>([]);
@@ -24,6 +45,26 @@ function App() {
   const [deleteFilePath, setDeleteFilePath] = useState("");
   const [deleteRecursive, setDeleteRecursive] = useState(false);
   const [deleteStatus, setDeleteStatus] = useState("");
+
+  const [command, setCommand] = useState("");
+  const [commandResult, setCommandResult] = useState<CommandOutput | null>(null);
+  const [commandStatus, setCommandStatus] = useState("");
+
+  const [newDirPath, setNewDirPath] = useState("");
+  const [createDirStatus, setCreateDirStatus] = useState("");
+
+  const [moveFrom, setMoveFrom] = useState("");
+  const [moveTo, setMoveTo] = useState("");
+  const [moveStatus, setMoveStatus] = useState("");
+
+  const [searchNamePattern, setSearchNamePattern] = useState("");
+  const [searchContentPattern, setSearchContentPattern] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchStatus, setSearchStatus] = useState("");
+
+  const [metadataPath, setMetadataPath] = useState("");
+  const [metadataResult, setMetadataResult] = useState<FileMetadata | null>(null);
+  const [metadataStatus, setMetadataStatus] = useState("");
 
   async function handleReadFile() {
     try {
@@ -136,6 +177,94 @@ function App() {
     }
   }
 
+  async function handleRunCommand(confirmed: boolean) {
+    try {
+      const result = await invoke<CommandOutput>("execute_command_tool", {
+        workspaceRoot,
+        command,
+        confirmed,
+      });
+      setCommandResult(result);
+      setCommandStatus("");
+    } catch (err) {
+      const errMsg = String(err);
+      if (errMsg.includes("PRIVILEGED_CONFIRMATION_REQUIRED")) {
+        const approve = window.confirm(
+          `PRIVILEGED COMMAND\n\n"${command}"\n\nThis command was classified as privileged/high-risk. Run it anyway?`
+        );
+        if (approve) {
+          await handleRunCommand(true);
+        } else {
+          setCommandStatus("Command cancelled by user.");
+        }
+      } else {
+        setCommandStatus(`Error: ${errMsg}`);
+      }
+    }
+  }
+
+  async function handleCreateDirectory() {
+    try {
+      await invoke("create_directory_tool", {
+        workspaceRoot,
+        relativePath: newDirPath,
+      });
+      setCreateDirStatus(`Successfully created "${newDirPath}".`);
+    } catch (err) {
+      setCreateDirStatus(`Error: ${err}`);
+    }
+  }
+
+  async function handleMoveRename() {
+    const confirmed = window.confirm(
+      `The agent wants to MOVE/RENAME "${moveFrom}" to "${moveTo}".\n\nApprove?`
+    );
+    if (!confirmed) {
+      setMoveStatus("Move cancelled by user.");
+      return;
+    }
+
+    try {
+      await invoke("move_rename_tool", {
+        workspaceRoot,
+        fromRelativePath: moveFrom,
+        toRelativePath: moveTo,
+      });
+      setMoveStatus(`Successfully moved "${moveFrom}" to "${moveTo}".`);
+    } catch (err) {
+      setMoveStatus(`Error: ${err}`);
+    }
+  }
+
+  async function handleSearchFiles() {
+    try {
+      const results = await invoke<SearchResult[]>("search_files_tool", {
+        workspaceRoot,
+        namePattern: searchNamePattern || null,
+        contentPattern: searchContentPattern || null,
+      });
+      setSearchResults(results);
+      setSearchStatus(`Found ${results.length} result(s).`);
+    } catch (err) {
+      setSearchStatus(`Error: ${err}`);
+      setSearchResults([]);
+    }
+  }
+
+  async function handleGetMetadata() {
+    try {
+      const result = await invoke<FileMetadata>("get_file_metadata_tool", {
+        workspaceRoot,
+        relativePath: metadataPath,
+      });
+      setMetadataResult(result);
+      setMetadataStatus("");
+    } catch (err) {
+      setMetadataStatus(`Error: ${err}`);
+      setMetadataResult(null);
+    }
+  }
+
   return (
     <div style={{ padding: "2rem" }}>
       <h2>AI CoWorker</h2>
@@ -245,6 +374,106 @@ function App() {
       </label>
       <button onClick={handleDeleteFile} style={{ color: "#b00020" }}>Delete</button>
       <p style={{ marginTop: "0.5rem" }}>{deleteStatus}</p>
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Execute Terminal Command (risk-classified automatically)</h3>
+      <input
+        placeholder="Command to run (e.g. dir, git status, npm test)"
+        value={command}
+        onChange={(e) => setCommand(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <button onClick={() => handleRunCommand(false)}>Run Command</button>
+      <p style={{ marginTop: "0.5rem" }}>{commandStatus}</p>
+
+      {commandResult && (
+        <div style={{ marginTop: "1rem" }}>
+          <p>
+            <strong>Risk level:</strong> {commandResult.risk_level} |{" "}
+            <strong>Exit code:</strong> {commandResult.exit_code ?? "N/A"} |{" "}
+            <strong>Timed out:</strong> {commandResult.timed_out ? "yes" : "no"}
+          </p>
+          <p><strong>stdout:</strong></p>
+          <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
+            {commandResult.stdout || "(empty)"}
+          </pre>
+          <p><strong>stderr:</strong></p>
+          <pre style={{ whiteSpace: "pre-wrap", background: "#fff0f0", padding: "0.5rem" }}>
+            {commandResult.stderr || "(empty)"}
+          </pre>
+        </div>
+      )}
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Create Directory (mutating)</h3>
+      <input
+        placeholder="Relative path for new directory (e.g. new-folder)"
+        value={newDirPath}
+        onChange={(e) => setNewDirPath(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <button onClick={handleCreateDirectory}>Create Directory</button>
+      <p style={{ marginTop: "0.5rem" }}>{createDirStatus}</p>
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Move / Rename (mutating — requires confirmation)</h3>
+      <input
+        placeholder="From (e.g. old-name.txt)"
+        value={moveFrom}
+        onChange={(e) => setMoveFrom(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <input
+        placeholder="To (e.g. new-name.txt or subfolder/new-name.txt)"
+        value={moveTo}
+        onChange={(e) => setMoveTo(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <button onClick={handleMoveRename}>Move / Rename</button>
+      <p style={{ marginTop: "0.5rem" }}>{moveStatus}</p>
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Search Files (read-only)</h3>
+      <input
+        placeholder="Name pattern (optional, e.g. test)"
+        value={searchNamePattern}
+        onChange={(e) => setSearchNamePattern(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <input
+        placeholder="Content pattern (optional, e.g. hello)"
+        value={searchContentPattern}
+        onChange={(e) => setSearchContentPattern(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <button onClick={handleSearchFiles}>Search</button>
+      <p style={{ marginTop: "0.5rem" }}>{searchStatus}</p>
+      <ul>
+        {searchResults.map((r, i) => (
+          <li key={i}>{r.relative_path} — matched on {r.matched_on}</li>
+        ))}
+      </ul>
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Get File Metadata (read-only)</h3>
+      <input
+        placeholder="Relative path (e.g. notes.txt)"
+        value={metadataPath}
+        onChange={(e) => setMetadataPath(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <button onClick={handleGetMetadata}>Get Metadata</button>
+      <p style={{ marginTop: "0.5rem" }}>{metadataStatus}</p>
+      {metadataResult && (
+        <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
+          {JSON.stringify(metadataResult, null, 2)}
+        </pre>
+      )}
     </div>
   );
 }

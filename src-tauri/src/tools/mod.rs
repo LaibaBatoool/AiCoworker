@@ -1,4 +1,3 @@
-// tools/mod.rs
 pub mod read_file;
 pub mod list_directory;
 pub mod docx_images;
@@ -7,3 +6,9 @@ pub mod write_file;
 pub mod convert_to_pdf;
 pub mod edit_file;
 pub mod delete_file;
+pub mod command_classifier;
+pub mod execute_command;
+pub mod create_directory;
+pub mod move_rename;
+pub mod search_files;
+pub mod file_metadata;
