@@ -40,6 +40,19 @@ interface AuditLogRecord {
   detail: string;
 }
 
+interface SnapshotRecord {
+  commit_hash: string;
+  timestamp_unix: number;
+  message: string;
+}
+
+interface ToolSchema {
+  name: string;
+  description: string;
+  tier: string;
+  parameters: unknown;
+}
+
 function App() {
   const [dirPath, setDirPath] = useState("");
   const [dirEntries, setDirEntries] = useState<{ name: string; is_directory: boolean }[]>([]);
@@ -92,6 +105,14 @@ function App() {
 
   const [auditLog, setAuditLog] = useState<AuditLogRecord[]>([]);
   const [auditLogStatus, setAuditLogStatus] = useState("");
+
+  // --- New: snapshots (undo) ---
+  const [snapshots, setSnapshots] = useState<SnapshotRecord[]>([]);
+  const [snapshotStatus, setSnapshotStatus] = useState("");
+
+  // --- New: tool registry debug viewer ---
+  const [toolSchemas, setToolSchemas] = useState<ToolSchema[]>([]);
+  const [toolSchemasStatus, setToolSchemasStatus] = useState("");
 
   async function handleReadFile() {
     try {
@@ -338,6 +359,57 @@ function App() {
     } catch (err) {
       setAuditLogStatus(`Error: ${err}`);
       setAuditLog([]);
+    }
+  }
+
+  // --- New: snapshots (undo) ---
+
+  async function handleListSnapshots() {
+    try {
+      const result = await invoke<SnapshotRecord[]>("list_snapshots_tool", { workspaceRoot });
+      setSnapshots(result);
+      setSnapshotStatus(`Loaded ${result.length} snapshot(s).`);
+    } catch (err) {
+      setSnapshotStatus(`Error: ${err}`);
+      setSnapshots([]);
+    }
+  }
+
+  async function handleRestoreSnapshot(commitHash: string, message: string) {
+    const typed = window.prompt(
+      `PRIVILEGED ACTION — enforced by the backend, not just this dialog.\n\nThis will HARD RESET the entire workspace back to:\n"${message}"\n(${commitHash.slice(
+        0,
+        8
+      )})\n\nEverything done since then will be lost. Type RESTORE to confirm:`
+    );
+
+    if (typed !== "RESTORE") {
+      setSnapshotStatus("Restore cancelled — confirmation text did not match.");
+      return;
+    }
+
+    try {
+      await invoke("restore_snapshot_tool", {
+        workspaceRoot,
+        commitHash,
+        confirmed: true,
+      });
+      setSnapshotStatus(`Successfully restored to snapshot ${commitHash.slice(0, 8)}.`);
+    } catch (err) {
+      setSnapshotStatus(`Error: ${err}`);
+    }
+  }
+
+  // --- New: tool registry debug viewer ---
+
+  async function handleListToolSchemas() {
+    try {
+      const result = await invoke<ToolSchema[]>("list_tool_schemas_tool", {});
+      setToolSchemas(result);
+      setToolSchemasStatus(`Loaded ${result.length} tool schema(s).`);
+    } catch (err) {
+      setToolSchemasStatus(`Error: ${err}`);
+      setToolSchemas([]);
     }
   }
 
@@ -599,6 +671,72 @@ function App() {
           ))}
         </tbody>
       </table>
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3 style={{ color: "#b00020" }}>Snapshots / Undo (privileged restore — backend-enforced)</h3>
+      <p style={{ fontSize: "0.85rem", color: "#666" }}>
+        A snapshot is taken automatically before every mutating/privileged action. Restoring
+        hard-resets the entire workspace to that point in time.
+      </p>
+      <button onClick={handleListSnapshots}>Refresh Snapshots</button>
+      <p style={{ marginTop: "0.5rem" }}>{snapshotStatus}</p>
+      <table style={{ width: "100%", marginTop: "0.5rem", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ textAlign: "left", borderBottom: "1px solid #ccc" }}>
+            <th>Time</th>
+            <th>Message</th>
+            <th>Commit</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {snapshots.map((s) => (
+            <tr key={s.commit_hash} style={{ borderBottom: "1px solid #eee" }}>
+              <td>{new Date(s.timestamp_unix * 1000).toLocaleString()}</td>
+              <td>{s.message}</td>
+              <td style={{ fontFamily: "monospace" }}>{s.commit_hash.slice(0, 8)}</td>
+              <td>
+                <button
+                  onClick={() => handleRestoreSnapshot(s.commit_hash, s.message)}
+                  style={{ color: "#b00020" }}
+                >
+                  Restore
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Tool Registry (debug — schemas the agent loop will use)</h3>
+      <p style={{ fontSize: "0.85rem", color: "#666" }}>
+        The "tier" shown here is informational only — the backend independently re-checks and
+        enforces the real tier on every call, regardless of what a model claims.
+      </p>
+      <button onClick={handleListToolSchemas}>Load Tool Schemas</button>
+      <p style={{ marginTop: "0.5rem" }}>{toolSchemasStatus}</p>
+      {toolSchemas.map((t) => (
+        <details key={t.name} style={{ marginTop: "0.5rem" }}>
+          <summary>
+            <strong>{t.name}</strong>{" "}
+            <span
+              style={{
+                color:
+                  t.tier === "privileged" ? "#b00020" : t.tier === "mutating" ? "#a15c00" : "#2a7a2a",
+              }}
+            >
+              [{t.tier}]
+            </span>{" "}
+            — {t.description}
+          </summary>
+          <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
+            {JSON.stringify(t.parameters, null, 2)}
+          </pre>
+        </details>
+      ))}
     </div>
   );
 }
