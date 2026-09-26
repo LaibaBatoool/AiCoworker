@@ -22,6 +22,24 @@ interface FileMetadata {
   read_only: boolean;
 }
 
+interface GitDiffResult {
+  diff: string;
+  has_changes: boolean;
+}
+
+interface GitCommitResult {
+  success: boolean;
+  output: string;
+}
+
+interface AuditLogRecord {
+  timestamp_unix: number;
+  tier: string;
+  action: string;
+  success: boolean;
+  detail: string;
+}
+
 function App() {
   const [dirPath, setDirPath] = useState("");
   const [dirEntries, setDirEntries] = useState<{ name: string; is_directory: boolean }[]>([]);
@@ -66,6 +84,15 @@ function App() {
   const [metadataResult, setMetadataResult] = useState<FileMetadata | null>(null);
   const [metadataStatus, setMetadataStatus] = useState("");
 
+  const [gitDiffResult, setGitDiffResult] = useState<GitDiffResult | null>(null);
+  const [gitDiffStatus, setGitDiffStatus] = useState("");
+
+  const [commitMessage, setCommitMessage] = useState("");
+  const [commitStatus, setCommitStatus] = useState("");
+
+  const [auditLog, setAuditLog] = useState<AuditLogRecord[]>([]);
+  const [auditLogStatus, setAuditLogStatus] = useState("");
+
   async function handleReadFile() {
     try {
       const result = await invoke<string>("read_file_tool", {
@@ -91,10 +118,10 @@ function App() {
   }
 
   async function handleWriteFile() {
-    const confirmed = window.confirm(
+    const confirmedByUser = window.confirm(
       `The agent wants to WRITE to "${writeFilePath}".\n\nThis will create or overwrite this file. Approve?`
     );
-    if (!confirmed) {
+    if (!confirmedByUser) {
       setWriteStatus("Write cancelled by user.");
       return;
     }
@@ -104,6 +131,7 @@ function App() {
         workspaceRoot,
         relativePath: writeFilePath,
         content: writeContent,
+        confirmed: true,
       });
       setWriteStatus(`Successfully wrote to "${writeFilePath}".`);
     } catch (err) {
@@ -112,10 +140,10 @@ function App() {
   }
 
   async function handleConvertToPdf() {
-    const confirmed = window.confirm(
-      `The agent wants to CONVERT "${convertFilePath}" to PDF.\n\nThis will create a new PDF file alongside it. Approve?`
+    const confirmedByUser = window.confirm(
+      `The agent wants to CONVERT "${convertFilePath}" to PDF.\n\nApprove?`
     );
-    if (!confirmed) {
+    if (!confirmedByUser) {
       setConvertStatus("Conversion cancelled by user.");
       return;
     }
@@ -124,6 +152,7 @@ function App() {
       const resultFilename = await invoke<string>("convert_to_pdf_tool", {
         workspaceRoot,
         relativePath: convertFilePath,
+        confirmed: true,
       });
       setConvertStatus(`Successfully converted to "${resultFilename}".`);
     } catch (err) {
@@ -132,10 +161,10 @@ function App() {
   }
 
   async function handleEditFile() {
-    const confirmed = window.confirm(
+    const confirmedByUser = window.confirm(
       `The agent wants to EDIT "${editFilePath}".\n\nReplace:\n"${oldText}"\n\nWith:\n"${newText}"\n\nApprove?`
     );
-    if (!confirmed) {
+    if (!confirmedByUser) {
       setEditStatus("Edit cancelled by user.");
       return;
     }
@@ -146,6 +175,7 @@ function App() {
         relativePath: editFilePath,
         oldText,
         newText,
+        confirmed: true,
       });
       setEditStatus(`Successfully edited "${editFilePath}".`);
     } catch (err) {
@@ -155,8 +185,8 @@ function App() {
 
   async function handleDeleteFile() {
     const typed = window.prompt(
-      `PRIVILEGED ACTION — this cannot be undone.\n\nThe agent wants to DELETE "${deleteFilePath}"${
-        deleteRecursive ? " (and everything inside it, if it's a folder)" : ""
+      `PRIVILEGED ACTION — enforced by the backend, not just this dialog.\n\nThe agent wants to DELETE "${deleteFilePath}"${
+        deleteRecursive ? " (and everything inside it)" : ""
       }.\n\nType the exact file/folder name to confirm:`
     );
 
@@ -170,6 +200,7 @@ function App() {
         workspaceRoot,
         relativePath: deleteFilePath,
         recursive: deleteRecursive,
+        confirmed: true,
       });
       setDeleteStatus(`Successfully deleted "${deleteFilePath}".`);
     } catch (err) {
@@ -190,7 +221,7 @@ function App() {
       const errMsg = String(err);
       if (errMsg.includes("PRIVILEGED_CONFIRMATION_REQUIRED")) {
         const approve = window.confirm(
-          `PRIVILEGED COMMAND\n\n"${command}"\n\nThis command was classified as privileged/high-risk. Run it anyway?`
+          `PRIVILEGED COMMAND (backend-enforced)\n\n"${command}"\n\nThis command was classified as privileged. Run it anyway?`
         );
         if (approve) {
           await handleRunCommand(true);
@@ -208,6 +239,7 @@ function App() {
       await invoke("create_directory_tool", {
         workspaceRoot,
         relativePath: newDirPath,
+        confirmed: true,
       });
       setCreateDirStatus(`Successfully created "${newDirPath}".`);
     } catch (err) {
@@ -216,10 +248,10 @@ function App() {
   }
 
   async function handleMoveRename() {
-    const confirmed = window.confirm(
+    const confirmedByUser = window.confirm(
       `The agent wants to MOVE/RENAME "${moveFrom}" to "${moveTo}".\n\nApprove?`
     );
-    if (!confirmed) {
+    if (!confirmedByUser) {
       setMoveStatus("Move cancelled by user.");
       return;
     }
@@ -229,6 +261,7 @@ function App() {
         workspaceRoot,
         fromRelativePath: moveFrom,
         toRelativePath: moveTo,
+        confirmed: true,
       });
       setMoveStatus(`Successfully moved "${moveFrom}" to "${moveTo}".`);
     } catch (err) {
@@ -265,6 +298,49 @@ function App() {
     }
   }
 
+  async function handleGitDiff() {
+    try {
+      const result = await invoke<GitDiffResult>("git_diff_tool", { workspaceRoot });
+      setGitDiffResult(result);
+      setGitDiffStatus("");
+    } catch (err) {
+      setGitDiffStatus(`Error: ${err}`);
+      setGitDiffResult(null);
+    }
+  }
+
+  async function handleGitCommit() {
+    const confirmedByUser = window.confirm(
+      `The agent wants to COMMIT with message:\n"${commitMessage}"\n\nThis stages ALL changes and commits them. Approve?`
+    );
+    if (!confirmedByUser) {
+      setCommitStatus("Commit cancelled by user.");
+      return;
+    }
+
+    try {
+      const result = await invoke<GitCommitResult>("git_commit_tool", {
+        workspaceRoot,
+        message: commitMessage,
+        confirmed: true,
+      });
+      setCommitStatus(`Commit ${result.success ? "succeeded" : "failed"}: ${result.output}`);
+    } catch (err) {
+      setCommitStatus(`Error: ${err}`);
+    }
+  }
+
+  async function handleGetAuditLog() {
+    try {
+      const result = await invoke<AuditLogRecord[]>("get_audit_log_tool", { workspaceRoot });
+      setAuditLog(result);
+      setAuditLogStatus(`Loaded ${result.length} entries.`);
+    } catch (err) {
+      setAuditLogStatus(`Error: ${err}`);
+      setAuditLog([]);
+    }
+  }
+
   return (
     <div style={{ padding: "2rem" }}>
       <h2>AI CoWorker</h2>
@@ -292,7 +368,6 @@ function App() {
         style={{ width: "100%", marginBottom: "0.5rem" }}
       />
       <button onClick={handleListDirectory}>List Directory</button>
-
       <ul>
         {dirEntries.map((entry) => (
           <li key={entry.name}>
@@ -303,7 +378,7 @@ function App() {
 
       <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Write File (mutating — requires confirmation)</h3>
+      <h3>Write File (mutating)</h3>
       <input
         placeholder="Relative file path to write (e.g. new-note.txt)"
         value={writeFilePath}
@@ -321,9 +396,9 @@ function App() {
 
       <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Convert DOCX to PDF (mutating — requires confirmation)</h3>
+      <h3>Convert DOCX to PDF (mutating)</h3>
       <input
-        placeholder="Relative .docx path to convert (e.g. writetest2.docx)"
+        placeholder="Relative .docx path to convert"
         value={convertFilePath}
         onChange={(e) => setConvertFilePath(e.target.value)}
         style={{ width: "100%", marginBottom: "0.5rem" }}
@@ -333,9 +408,9 @@ function App() {
 
       <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Edit File (mutating — requires confirmation)</h3>
+      <h3>Edit File (mutating)</h3>
       <input
-        placeholder="Relative file path to edit (e.g. notes.txt)"
+        placeholder="Relative file path to edit"
         value={editFilePath}
         onChange={(e) => setEditFilePath(e.target.value)}
         style={{ width: "100%", marginBottom: "0.5rem" }}
@@ -357,9 +432,9 @@ function App() {
 
       <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3 style={{ color: "#b00020" }}>Delete File/Folder (privileged — type name to confirm)</h3>
+      <h3 style={{ color: "#b00020" }}>Delete File/Folder (privileged — backend-enforced)</h3>
       <input
-        placeholder="Relative path to delete (e.g. old-test.txt or old-folder)"
+        placeholder="Relative path to delete"
         value={deleteFilePath}
         onChange={(e) => setDeleteFilePath(e.target.value)}
         style={{ width: "100%", marginBottom: "0.5rem" }}
@@ -377,7 +452,7 @@ function App() {
 
       <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Execute Terminal Command (risk-classified automatically)</h3>
+      <h3>Execute Terminal Command (risk-classified, privileged backend-enforced)</h3>
       <input
         placeholder="Command to run (e.g. dir, git status, npm test)"
         value={command}
@@ -386,7 +461,6 @@ function App() {
       />
       <button onClick={() => handleRunCommand(false)}>Run Command</button>
       <p style={{ marginTop: "0.5rem" }}>{commandStatus}</p>
-
       {commandResult && (
         <div style={{ marginTop: "1rem" }}>
           <p>
@@ -409,7 +483,7 @@ function App() {
 
       <h3>Create Directory (mutating)</h3>
       <input
-        placeholder="Relative path for new directory (e.g. new-folder)"
+        placeholder="Relative path for new directory"
         value={newDirPath}
         onChange={(e) => setNewDirPath(e.target.value)}
         style={{ width: "100%", marginBottom: "0.5rem" }}
@@ -419,15 +493,15 @@ function App() {
 
       <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Move / Rename (mutating — requires confirmation)</h3>
+      <h3>Move / Rename (mutating)</h3>
       <input
-        placeholder="From (e.g. old-name.txt)"
+        placeholder="From"
         value={moveFrom}
         onChange={(e) => setMoveFrom(e.target.value)}
         style={{ width: "100%", marginBottom: "0.5rem" }}
       />
       <input
-        placeholder="To (e.g. new-name.txt or subfolder/new-name.txt)"
+        placeholder="To"
         value={moveTo}
         onChange={(e) => setMoveTo(e.target.value)}
         style={{ width: "100%", marginBottom: "0.5rem" }}
@@ -439,13 +513,13 @@ function App() {
 
       <h3>Search Files (read-only)</h3>
       <input
-        placeholder="Name pattern (optional, e.g. test)"
+        placeholder="Name pattern (optional)"
         value={searchNamePattern}
         onChange={(e) => setSearchNamePattern(e.target.value)}
         style={{ width: "100%", marginBottom: "0.5rem" }}
       />
       <input
-        placeholder="Content pattern (optional, e.g. hello)"
+        placeholder="Content pattern (optional)"
         value={searchContentPattern}
         onChange={(e) => setSearchContentPattern(e.target.value)}
         style={{ width: "100%", marginBottom: "0.5rem" }}
@@ -462,7 +536,7 @@ function App() {
 
       <h3>Get File Metadata (read-only)</h3>
       <input
-        placeholder="Relative path (e.g. notes.txt)"
+        placeholder="Relative path"
         value={metadataPath}
         onChange={(e) => setMetadataPath(e.target.value)}
         style={{ width: "100%", marginBottom: "0.5rem" }}
@@ -474,6 +548,57 @@ function App() {
           {JSON.stringify(metadataResult, null, 2)}
         </pre>
       )}
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Git Diff (read-only)</h3>
+      <button onClick={handleGitDiff}>Show Diff</button>
+      <p style={{ marginTop: "0.5rem" }}>{gitDiffStatus}</p>
+      {gitDiffResult && (
+        <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
+          {gitDiffResult.has_changes ? gitDiffResult.diff : "No changes."}
+        </pre>
+      )}
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Git Commit (mutating)</h3>
+      <input
+        placeholder="Commit message"
+        value={commitMessage}
+        onChange={(e) => setCommitMessage(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <button onClick={handleGitCommit}>Stage All &amp; Commit</button>
+      <p style={{ marginTop: "0.5rem" }}>{commitStatus}</p>
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Audit Log (backend-generated, read-only)</h3>
+      <button onClick={handleGetAuditLog}>Refresh Audit Log</button>
+      <p style={{ marginTop: "0.5rem" }}>{auditLogStatus}</p>
+      <table style={{ width: "100%", marginTop: "0.5rem", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ textAlign: "left", borderBottom: "1px solid #ccc" }}>
+            <th>Time</th>
+            <th>Tier</th>
+            <th>Action</th>
+            <th>Success</th>
+          </tr>
+        </thead>
+        <tbody>
+          {auditLog.map((entry, i) => (
+            <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
+              <td>{new Date(entry.timestamp_unix * 1000).toLocaleString()}</td>
+              <td style={{ color: entry.tier === "privileged" ? "#b00020" : "inherit" }}>
+                {entry.tier}
+              </td>
+              <td>{entry.action}</td>
+              <td>{entry.success ? "✅" : "❌"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

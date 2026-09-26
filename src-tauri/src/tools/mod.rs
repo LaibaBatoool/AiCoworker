@@ -12,3 +12,4 @@ pub mod create_directory;
 pub mod move_rename;
 pub mod search_files;
 pub mod file_metadata;
+pub mod git_ops;
