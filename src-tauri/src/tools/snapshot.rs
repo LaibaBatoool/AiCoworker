@@ -174,6 +174,17 @@ pub fn take_snapshot(workspace: &Workspace, label: &str) -> Result<String, Strin
 }
 
 /// Lists all snapshots, most recent first.
+///
+/// NOTE: this walks plain `git log` from HEAD. That used to be a
+/// trap — restore_snapshot previously used `git reset --hard`, which
+/// moves HEAD backward and orphans every commit that came after the
+/// restored point (they'd vanish from this list even though the
+/// commit objects were still sitting in the repo, recoverable only
+/// via reflog). restore_snapshot no longer does that (see below): it
+/// always commits FORWARD, so HEAD only ever moves ahead and nothing
+/// legitimate can fall out of this listing. If that invariant is
+/// ever broken again in restore_snapshot, this function is the first
+/// place that will quietly start lying about what's restorable.
 pub fn list_snapshots(workspace: &Workspace) -> Result<Vec<SnapshotRecord>, String> {
     let git_dir = snapshot_git_dir(workspace);
     if !is_valid_repo(&git_dir) {
@@ -200,8 +211,27 @@ pub fn list_snapshots(workspace: &Workspace) -> Result<Vec<SnapshotRecord>, Stri
     Ok(records)
 }
 
-/// Restores the workspace to exactly the state captured in
-/// `commit_hash`.
+/// Restores the workspace to exactly the file state captured in
+/// `commit_hash` — WITHOUT rewriting shadow-repo history.
+///
+/// Old approach (removed): `git reset --hard <commit_hash>`. This
+/// physically moved the branch pointer backward, which silently
+/// orphaned every snapshot taken after that point — they'd disappear
+/// from list_snapshots and become recoverable only via `git reflog`,
+/// which nothing in this app exposes. A user (or an agent) restoring
+/// to the wrong point could make later, perfectly valid snapshots
+/// look like they no longer exist.
+///
+/// New approach: read the OLD commit's tree into the CURRENT index
+/// and working directory (`git read-tree --reset -u`, which adds,
+/// modifies, and deletes files as needed to match that tree exactly
+/// — the same file-level effect as a hard reset), then commit that
+/// resulting state as a brand-new commit on top of history. HEAD
+/// only ever moves forward. Every snapshot that existed before this
+/// restore — including ones "later" than the point being restored
+/// to — remains permanently visible in `git log`/list_snapshots, and
+/// the restore itself becomes its own labeled, restorable snapshot
+/// (so an accidental restore is itself undoable the same way).
 pub fn restore_snapshot(workspace: &Workspace, commit_hash: &str) -> Result<(), String> {
     let git_dir = snapshot_git_dir(workspace);
     if !is_valid_repo(&git_dir) {
@@ -213,11 +243,36 @@ pub fn restore_snapshot(workspace: &Workspace, commit_hash: &str) -> Result<(), 
         return Err(format!("'{}' is not a known snapshot.", commit_hash));
     }
 
-    let reset = shadow_git(workspace, &["reset", "--hard", commit_hash])?;
-    if !reset.status.success() {
+    // Grab the original label so the restore commit's message is
+    // traceable back to what it actually restored, not just a hash.
+    let show = shadow_git(workspace, &["log", "-1", "--pretty=format:%s", commit_hash])?;
+    let original_label = String::from_utf8_lossy(&show.stdout).trim().to_string();
+
+    // Overwrite the index + working tree to match the target
+    // commit's tree exactly. This is the file-level equivalent of
+    // `reset --hard`, but it never touches which commit HEAD (the
+    // branch) points to — that only happens on the commit below.
+    let read_tree = shadow_git(workspace, &["read-tree", "--reset", "-u", commit_hash])?;
+    if !read_tree.status.success() {
         return Err(format!(
-            "Restore failed: {}",
-            String::from_utf8_lossy(&reset.stderr)
+            "Restore failed while applying snapshot tree: {}",
+            String::from_utf8_lossy(&read_tree.stderr)
+        ));
+    }
+
+    let commit = shadow_git(
+        workspace,
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            &format!("restore_snapshot: back to \"{}\" ({})", original_label, commit_hash),
+        ],
+    )?;
+    if !commit.status.success() {
+        return Err(format!(
+            "Restore succeeded on disk but failed to record as a new snapshot: {}",
+            String::from_utf8_lossy(&commit.stderr)
         ));
     }
 
