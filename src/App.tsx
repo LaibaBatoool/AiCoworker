@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 interface CommandOutput {
   risk_level: string;
@@ -53,7 +54,35 @@ interface ToolSchema {
   parameters: unknown;
 }
 
+// --- Agent orchestration types (mirror src-tauri/src/agent/*) ---
+
+interface ToolCallFunction {
+  name: string;
+  arguments: string; // JSON-encoded string
+}
+
+interface ToolCallRequest {
+  id: string;
+  type: string;
+  function: ToolCallFunction;
+}
+
+interface ChatMessage {
+  role: string; // "system" | "user" | "assistant" | "tool"
+  content?: string | null;
+  tool_calls?: ToolCallRequest[] | null;
+  tool_call_id?: string | null;
+}
+
+type AgentStepResult =
+  | { status: "Done"; messages: ChatMessage[]; answer: string }
+  | { status: "AwaitingConfirmation"; messages: ChatMessage[]; tool_name: string; arguments: unknown }
+  | { status: "StoppedForSafety"; messages: ChatMessage[]; reason: string }
+  | { status: "Error"; message: string };
+
 function App() {
+  const [runningJobId, setRunningJobId] = useState<number | null>(null);
+
   const [dirPath, setDirPath] = useState("");
   const [dirEntries, setDirEntries] = useState<{ name: string; is_directory: boolean }[]>([]);
 
@@ -106,13 +135,20 @@ function App() {
   const [auditLog, setAuditLog] = useState<AuditLogRecord[]>([]);
   const [auditLogStatus, setAuditLogStatus] = useState("");
 
-  // --- New: snapshots (undo) ---
   const [snapshots, setSnapshots] = useState<SnapshotRecord[]>([]);
   const [snapshotStatus, setSnapshotStatus] = useState("");
 
-  // --- New: tool registry debug viewer ---
   const [toolSchemas, setToolSchemas] = useState<ToolSchema[]>([]);
   const [toolSchemasStatus, setToolSchemasStatus] = useState("");
+
+  // --- Agent orchestration (ReAct loop) ---
+  const [agentGoal, setAgentGoal] = useState("");
+  const [agentApiKey, setAgentApiKey] = useState(""); // leave blank to use GROQ_API_KEY from src-tauri/.env
+  const [agentModel, setAgentModel] = useState("openai/gpt-oss-120b");
+  const [agentMessages, setAgentMessages] = useState<ChatMessage[]>([]);
+  const [agentStatus, setAgentStatus] = useState("");
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [agentFinalAnswer, setAgentFinalAnswer] = useState<string | null>(null);
 
   async function handleReadFile() {
     try {
@@ -206,8 +242,7 @@ function App() {
 
   async function handleDeleteFile() {
     const typed = window.prompt(
-      `PRIVILEGED ACTION — enforced by the backend, not just this dialog.\n\nThe agent wants to DELETE "${deleteFilePath}"${
-        deleteRecursive ? " (and everything inside it)" : ""
+      `PRIVILEGED ACTION — enforced by the backend, not just this dialog.\n\nThe agent wants to DELETE "${deleteFilePath}"${deleteRecursive ? " (and everything inside it)" : ""
       }.\n\nType the exact file/folder name to confirm:`
     );
 
@@ -231,13 +266,26 @@ function App() {
 
   async function handleRunCommand(confirmed: boolean) {
     try {
-      const result = await invoke<CommandOutput>("execute_command_tool", {
+      const jobId = await invoke<number>("start_command_tool", {
         workspaceRoot,
         command,
         confirmed,
       });
-      setCommandResult(result);
-      setCommandStatus("");
+      setRunningJobId(jobId);
+      setCommandResult(null);
+      setCommandStatus("Running... you can cancel it below while it's in progress.");
+
+      const unlisten = await listen<{ jobId: number; output: CommandOutput }>(
+        "command-finished",
+        (event) => {
+          if (event.payload.jobId === jobId) {
+            setCommandResult(event.payload.output);
+            setCommandStatus("");
+            setRunningJobId(null);
+            unlisten();
+          }
+        }
+      );
     } catch (err) {
       const errMsg = String(err);
       if (errMsg.includes("PRIVILEGED_CONFIRMATION_REQUIRED")) {
@@ -252,6 +300,16 @@ function App() {
       } else {
         setCommandStatus(`Error: ${errMsg}`);
       }
+    }
+  }
+
+  async function handleCancelCommand() {
+    if (runningJobId === null) return;
+    try {
+      await invoke("cancel_command_tool", { jobId: runningJobId });
+      setCommandStatus("Cancelling...");
+    } catch (err) {
+      setCommandStatus(`Error cancelling: ${err}`);
     }
   }
 
@@ -362,8 +420,6 @@ function App() {
     }
   }
 
-  // --- New: snapshots (undo) ---
-
   async function handleListSnapshots() {
     try {
       const result = await invoke<SnapshotRecord[]>("list_snapshots_tool", { workspaceRoot });
@@ -400,8 +456,6 @@ function App() {
     }
   }
 
-  // --- New: tool registry debug viewer ---
-
   async function handleListToolSchemas() {
     try {
       const result = await invoke<ToolSchema[]>("list_tool_schemas_tool", {});
@@ -411,6 +465,124 @@ function App() {
       setToolSchemasStatus(`Error: ${err}`);
       setToolSchemas([]);
     }
+  }
+
+  // --- Agent orchestration (ReAct loop) ---
+
+  async function callAgentStep(messages: ChatMessage[], resumeConfirmed: boolean): Promise<AgentStepResult> {
+    return await invoke<AgentStepResult>("run_agent_tool", {
+      workspaceRoot,
+      apiKey: agentApiKey,
+      model: agentModel,
+      messagesJson: JSON.stringify(messages),
+      resumeConfirmed,
+    });
+  }
+
+  async function processAgentResult(result: AgentStepResult) {
+    if (result.status === "Done") {
+      setAgentMessages(result.messages);
+      setAgentFinalAnswer(result.answer);
+      setAgentStatus("Done.");
+      setAgentRunning(false);
+      return;
+    }
+
+    if (result.status === "AwaitingConfirmation") {
+      setAgentMessages(result.messages);
+      const approve = window.confirm(
+        `PRIVILEGED ACTION requested by the agent (backend-enforced, same checkpoint as everywhere else):\n\n${result.tool_name}\n${JSON.stringify(
+          result.arguments,
+          null,
+          2
+        )}\n\nApprove?`
+      );
+      if (approve) {
+        setAgentStatus(`Approved "${result.tool_name}" — resuming...`);
+        try {
+          const next = await callAgentStep(result.messages, true);
+          await processAgentResult(next);
+        } catch (err) {
+          setAgentStatus(`Error: ${err}`);
+          setAgentRunning(false);
+        }
+      } else {
+        setAgentStatus(`You declined "${result.tool_name}". Agent paused — click Run Agent again to start a fresh attempt.`);
+        setAgentRunning(false);
+      }
+      return;
+    }
+
+    if (result.status === "StoppedForSafety") {
+      setAgentMessages(result.messages);
+      setAgentStatus(`Stopped itself: ${result.reason}`);
+      setAgentRunning(false);
+      return;
+    }
+
+    // status === "Error"
+    setAgentStatus(`Error: ${result.message}`);
+    setAgentRunning(false);
+  }
+
+  async function handleStartAgent() {
+    setAgentRunning(true);
+    setAgentFinalAnswer(null);
+    setAgentStatus("Running...");
+
+    const initialMessages: ChatMessage[] = [
+      {
+        role: "system",
+        content:
+          "You are a helpful coding assistant with access to filesystem and terminal tools in this workspace. Use the tools to accomplish the user's goal step by step. When you give your final answer: write it for a human to read, not as a single run-on line — use short paragraphs or a markdown-style list with one item per line (each starting with '- '), and put each item on its own line using an actual newline character. Never use the execute_command tool for simple computations you can do yourself, such as converting a Unix timestamp to a readable date, doing arithmetic, or formatting text — reason about those directly and only use execute_command for things that genuinely require running a program.",
+      },
+      { role: "user", content: agentGoal },
+    ];
+    setAgentMessages(initialMessages);
+
+    try {
+      const result = await callAgentStep(initialMessages, false);
+      await processAgentResult(result);
+    } catch (err) {
+      setAgentStatus(`Error: ${err}`);
+      setAgentRunning(false);
+    }
+  }
+
+  function renderAgentTranscript() {
+    return agentMessages
+      .filter((m) => m.role !== "system")
+      .flatMap((m, i) => {
+        if (m.role === "user") {
+          return [
+            <div key={`u-${i}`} style={{ marginBottom: "0.5rem" }}>
+              <strong>Goal:</strong> {m.content}
+            </div>,
+          ];
+        }
+        if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+          return m.tool_calls.map((tc, j) => (
+            <div key={`a-${i}-${j}`} style={{ marginBottom: "0.25rem", fontFamily: "monospace" }}>
+              → <strong>{tc.function.name}</strong>({tc.function.arguments})
+            </div>
+          ));
+        }
+        if (m.role === "assistant" && m.content) {
+          return [
+            <div key={`af-${i}`} style={{ marginBottom: "0.5rem", whiteSpace: "pre-wrap" }}>
+              <strong>Final answer:</strong> {m.content}
+            </div>,
+          ];
+        }
+        if (m.role === "tool") {
+          return [
+            <div key={`t-${i}`} style={{ marginBottom: "0.5rem", color: "#555", fontFamily: "monospace" }}>
+              ← {m.content}
+            </div>,
+          ];
+        }
+        return [];
+      });
   }
 
   return (
@@ -532,6 +704,11 @@ function App() {
         style={{ width: "100%", marginBottom: "0.5rem" }}
       />
       <button onClick={() => handleRunCommand(false)}>Run Command</button>
+      {runningJobId !== null && (
+        <button onClick={handleCancelCommand} style={{ marginLeft: "0.5rem", color: "#b00020" }}>
+          Cancel
+        </button>
+      )}
       <p style={{ marginTop: "0.5rem" }}>{commandStatus}</p>
       {commandResult && (
         <div style={{ marginTop: "1rem" }}>
@@ -737,6 +914,46 @@ function App() {
           </pre>
         </details>
       ))}
+
+      <hr style={{ margin: "1.5rem 0" }} />
+
+      <h3>Run Agent (ReAct loop — privileged actions still backend-enforced)</h3>
+      <p style={{ fontSize: "0.85rem", color: "#666" }}>
+        Leave API key blank to use GROQ_API_KEY from src-tauri/.env. Any privileged tool call the
+        agent wants to make still pauses here for your approval, exactly like the manual controls
+        above — the model has no way to skip that.
+      </p>
+      <input
+        placeholder="Groq API key (optional — falls back to .env)"
+        value={agentApiKey}
+        onChange={(e) => setAgentApiKey(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+        type="password"
+      />
+      <input
+        placeholder="Model (e.g. openai/gpt-oss-120b)"
+        value={agentModel}
+        onChange={(e) => setAgentModel(e.target.value)}
+        style={{ width: "100%", marginBottom: "0.5rem" }}
+      />
+      <textarea
+        placeholder="Goal (e.g. List the files in the workspace, then read the first one and tell me what it contains.)"
+        value={agentGoal}
+        onChange={(e) => setAgentGoal(e.target.value)}
+        style={{ width: "100%", height: "80px", marginBottom: "0.5rem" }}
+      />
+      <button onClick={handleStartAgent} disabled={agentRunning || !agentGoal || !workspaceRoot}>
+        {agentRunning ? "Running..." : "Run Agent"}
+      </button>
+      <p style={{ marginTop: "0.5rem" }}>{agentStatus}</p>
+      {agentFinalAnswer && (
+        <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#e8f5e9", whiteSpace: "pre-wrap" }}>
+          <strong>Final answer:</strong> {agentFinalAnswer}
+        </div>
+      )}
+      <div style={{ marginTop: "1rem", padding: "0.5rem", background: "#f5f5f5" }}>
+        {renderAgentTranscript()}
+      </div>
     </div>
   );
 }
