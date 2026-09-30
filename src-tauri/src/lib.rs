@@ -1,7 +1,11 @@
 mod workspace;
 mod permission;
 mod tools;
+mod agent;
+mod running_commands;
 
+use std::sync::Arc;
+use tauri::Emitter;
 use workspace::Workspace;
 use permission::{checkpoint, log_action, read_audit_log, AuditLogRecord, PermissionTier};
 use tools::read_file::read_file;
@@ -10,7 +14,9 @@ use tools::write_file::write_file;
 use tools::convert_to_pdf::convert_to_pdf;
 use tools::edit_file::edit_file;
 use tools::delete_file::delete_file;
-use tools::execute_command::{execute_terminal_command, CommandOutput};
+use tools::execute_command::{
+    execute_terminal_command, spawn_terminal_command, wait_for_spawned_command, CommandOutput,
+};
 use tools::create_directory::create_directory;
 use tools::move_rename::move_rename;
 use tools::search_files::{search_files, SearchResult};
@@ -19,6 +25,7 @@ use tools::git_ops::{git_diff, git_commit, GitDiffResult, GitCommitResult};
 use tools::command_classifier::classify_command_risk;
 use tools::snapshot::{take_snapshot, list_snapshots, restore_snapshot, SnapshotRecord};
 use tools::registry::{all_tool_schemas, ToolSchema};
+use running_commands::RunningCommands;
 
 /// Takes a pre-action snapshot. Snapshot failures never block the
 /// actual operation (same philosophy as audit logging), but ARE now
@@ -245,9 +252,98 @@ fn restore_snapshot_tool(
     result
 }
 
+// ---- Cancellable command execution (manual UI panel only — the
+//      agent loop keeps using execute_command_tool above, untouched)
+
+#[tauri::command]
+fn start_command_tool(
+    app: tauri::AppHandle,
+    running: tauri::State<Arc<RunningCommands>>,
+    workspace_root: String,
+    command: String,
+    confirmed: bool,
+) -> Result<u64, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let tier = classify_command_risk(&command);
+    let action = format!("execute_command: {}", command);
+    checkpoint(&tier, &action, confirmed)?; // still blocks synchronously for privileged commands
+    if tier != PermissionTier::Safe {
+        snapshot_before(&ws, &action);
+    }
+
+    let (child, risk_level) = spawn_terminal_command(&ws, &command)?;
+    let (job_id, cancelled_flag) = running.register(Arc::clone(&child));
+
+    let running_for_thread = Arc::clone(running.inner());
+    let workspace_root_for_log = workspace_root.clone();
+    let command_for_log = command.clone();
+    let action_for_log = action.clone();
+    let app_for_emit = app.clone();
+
+    std::thread::spawn(move || {
+        let output = wait_for_spawned_command(child, cancelled_flag, risk_level);
+
+        if let Ok(log_ws) = Workspace::new(&workspace_root_for_log) {
+            let tier_for_log = classify_command_risk(&command_for_log);
+            log_action(
+                &log_ws,
+                &tier_for_log,
+                &action_for_log,
+                output.exit_code == Some(0),
+                &format!("{:?}", output),
+            );
+        }
+
+        running_for_thread.remove(job_id);
+
+        let _ = app_for_emit.emit(
+            "command-finished",
+            serde_json::json!({ "jobId": job_id, "output": output }),
+        );
+    });
+
+    Ok(job_id)
+}
+
+#[tauri::command]
+fn cancel_command_tool(running: tauri::State<Arc<RunningCommands>>, job_id: u64) -> Result<(), String> {
+    running.cancel(job_id)
+}
+
+// ---- Agent orchestration entry point ----
+
+#[tauri::command]
+async fn run_agent_tool(
+    workspace_root: String,
+    api_key: String,
+    model: String,
+    messages_json: String,
+    resume_confirmed: bool,
+) -> Result<agent::AgentStepResult, String> {
+    let messages: Vec<agent::model_client::ChatMessage> = serde_json::from_str(&messages_json)
+        .map_err(|e| format!("messages_json was not valid: {}", e))?;
+
+    let client = agent::model_client::OpenAiCompatibleClient::groq(api_key, model);
+    let outcome = agent::orchestrator::run_agent_loop(&client, &workspace_root, messages, resume_confirmed).await;
+
+    Ok(match outcome {
+        agent::orchestrator::LoopOutcome::Done { messages, answer } => agent::AgentStepResult::Done { messages, answer },
+        agent::orchestrator::LoopOutcome::AwaitingConfirmation { messages, tool_name, arguments } => {
+            agent::AgentStepResult::AwaitingConfirmation { messages, tool_name, arguments }
+        }
+        agent::orchestrator::LoopOutcome::StoppedForSafety { messages, reason } => {
+            agent::AgentStepResult::StoppedForSafety { messages, reason }
+        }
+        agent::orchestrator::LoopOutcome::Error(message) => agent::AgentStepResult::Error { message },
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    dotenvy::dotenv().ok(); // loads src-tauri/.env if present; harmless if it's missing
+
     tauri::Builder::default()
+        .manage(Arc::new(RunningCommands::default()))
         .invoke_handler(tauri::generate_handler![
             read_file_tool,
             list_directory_tool,
@@ -256,6 +352,8 @@ pub fn run() {
             edit_file_tool,
             delete_file_tool,
             execute_command_tool,
+            start_command_tool,
+            cancel_command_tool,
             create_directory_tool,
             move_rename_tool,
             search_files_tool,
@@ -265,7 +363,8 @@ pub fn run() {
             get_audit_log_tool,
             list_snapshots_tool,
             restore_snapshot_tool,
-            list_tool_schemas_tool
+            list_tool_schemas_tool,
+            run_agent_tool
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
