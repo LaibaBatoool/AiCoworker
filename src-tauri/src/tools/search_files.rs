@@ -1,3 +1,4 @@
+// src-tauri/src/tools/search_files.rs
 use crate::workspace::Workspace;
 use std::fs;
 use std::path::Path;
@@ -10,6 +11,14 @@ pub struct SearchResult {
 
 const MAX_RESULTS: usize = 50; // context-flooding guard, same principle as list_directory's non-recursion
 const MAX_FILE_SIZE_FOR_CONTENT_SEARCH: u64 = 2_000_000; // 2MB — skip huge files for content search
+
+/// AI CoWorker's own internal state (snapshot history, audit log) —
+/// never something a search should recurse into or return matches
+/// from. Same exclusion as list_directory.rs. This also matters for
+/// correctness, not just tidiness: without it, search_files would
+/// recurse into .aicoworker's git internals (loose objects, refs)
+/// and waste time/results on binary git data.
+const INTERNAL_DIR_NAME: &str = ".aicoworker";
 
 /// Searches the workspace recursively for files matching a name
 /// pattern and/or containing specific text. At least one of
@@ -57,6 +66,10 @@ fn search_recursive(
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
+
+        if name == INTERNAL_DIR_NAME {
+            continue; // never descend into or report on our own snapshot/audit state
+        }
 
         if path.is_dir() {
             search_recursive(root, &path, name_pattern, content_pattern, results)?;
