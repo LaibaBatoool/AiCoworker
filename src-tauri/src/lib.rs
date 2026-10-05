@@ -53,9 +53,13 @@ fn read_file_tool(workspace_root: String, relative_path: String) -> Result<Strin
 }
 
 #[tauri::command]
-fn list_directory_tool(workspace_root: String, relative_path: String) -> Result<Vec<DirEntry>, String> {
+fn list_directory_tool(
+    workspace_root: String,
+    relative_path: String,
+    include_metadata: Option<bool>,
+) -> Result<Vec<DirEntry>, String> {
     let ws = Workspace::new(&workspace_root)?;
-    list_directory(&ws, &relative_path)
+    list_directory(&ws, &relative_path, include_metadata.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -266,7 +270,7 @@ fn start_command_tool(
     let ws = Workspace::new(&workspace_root)?;
     let tier = classify_command_risk(&command);
     let action = format!("execute_command: {}", command);
-    checkpoint(&tier, &action, confirmed)?; // still blocks synchronously for privileged commands
+    checkpoint(&tier, &action, confirmed)?;
     if tier != PermissionTier::Safe {
         snapshot_before(&ws, &action);
     }
@@ -343,6 +347,8 @@ pub fn run() {
     dotenvy::dotenv().ok(); // loads src-tauri/.env if present; harmless if it's missing
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(RunningCommands::default()))
         .invoke_handler(tauri::generate_handler![
             read_file_tool,
