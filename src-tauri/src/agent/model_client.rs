@@ -1,7 +1,6 @@
 use crate::tools::registry::ToolSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::Duration;
 
 /// One message in the OpenAI-style chat transcript sent to the
 /// model, and accumulated as the loop progresses. Using this wire
@@ -87,6 +86,23 @@ fn to_openai_tool(schema: &ToolSchema) -> Value {
             "parameters": schema.parameters,
         }
     })
+}
+
+/// reqwest::Error's default Display only prints the top-level
+/// message and silently drops the actual chained cause (DNS failure,
+/// TLS handshake failure, connection refused, timeout, etc.) — which
+/// is exactly the information needed to tell those apart. This walks
+/// the full std::error::Error source chain so the real reason is
+/// visible instead of a generic "error sending request" with nothing
+/// else to go on.
+fn describe_reqwest_error(e: &reqwest::Error) -> String {
+    let mut msg = e.to_string();
+    let mut source = std::error::Error::source(e);
+    while let Some(s) = source {
+        msg.push_str(&format!(" | caused by: {}", s));
+        source = s.source();
+    }
+    msg
 }
 
 /// Total attempts (first try + retries) for a single model turn.
@@ -175,10 +191,24 @@ impl ModelClient for OpenAiCompatibleClient {
                 req = req.bearer_auth(key);
             }
 
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| format!("Model API request failed: {}", e))?;
+            let resp = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    // Network/connection-level failure (no HTTP
+                    // response at all) — different from a 4xx/5xx
+                    // response, and worth retrying a couple of times
+                    // in case it was transient, same as a 429.
+                    if attempt < MAX_ATTEMPTS {
+                        eprintln!(
+                            "Model API connection failed ({}), retrying in 2s (attempt {}/{})",
+                            describe_reqwest_error(&e), attempt, MAX_ATTEMPTS
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        continue;
+                    }
+                    return Err(format!("Model API request failed: {}", describe_reqwest_error(&e)));
+                }
+            };
 
             let status = resp.status();
             let retry_after_header = resp
@@ -187,10 +217,15 @@ impl ModelClient for OpenAiCompatibleClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.trim().parse::<f64>().ok());
 
-            let raw: Value = resp
-                .json()
-                .await
-                .map_err(|e| format!("Model API returned unparseable response: {}", e))?;
+            let raw: Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    return Err(format!(
+                        "Model API returned unparseable response: {}",
+                        describe_reqwest_error(&e)
+                    ))
+                }
+            };
 
             if status.is_success() {
                 break raw;
@@ -223,7 +258,7 @@ impl ModelClient for OpenAiCompatibleClient {
                         "Model API {} ({}), retrying in {:.1}s (attempt {}/{})",
                         status, code, w, attempt, MAX_ATTEMPTS
                     );
-                    tokio::time::sleep(Duration::from_secs_f64(w)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs_f64(w)).await;
                     continue;
                 }
                 _ => return Err(format!("Model API error ({}): {}", status, raw)),
