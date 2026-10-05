@@ -1,6 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import "./cowork.css";
+import Titlebar from "./components/Titlebar";
+import Sidebar from "./components/Sidebar";
+import CoworkView from "./components/CoworkView";
 
 interface CommandOutput {
   risk_level: string;
@@ -81,7 +85,7 @@ type AgentStepResult =
   | { status: "Error"; message: string };
 
 function App() {
-  const [runningJobId, setRunningJobId] = useState<number | null>(null);
+  const [activeView, setActiveView] = useState<"cowork" | "debug">("cowork");
 
   const [dirPath, setDirPath] = useState("");
   const [dirEntries, setDirEntries] = useState<{ name: string; is_directory: boolean }[]>([]);
@@ -109,6 +113,7 @@ function App() {
   const [command, setCommand] = useState("");
   const [commandResult, setCommandResult] = useState<CommandOutput | null>(null);
   const [commandStatus, setCommandStatus] = useState("");
+  const [runningJobId, setRunningJobId] = useState<number | null>(null);
 
   const [newDirPath, setNewDirPath] = useState("");
   const [createDirStatus, setCreateDirStatus] = useState("");
@@ -149,6 +154,18 @@ function App() {
   const [agentStatus, setAgentStatus] = useState("");
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentFinalAnswer, setAgentFinalAnswer] = useState<string | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    tool_name: string;
+    arguments: unknown;
+    messages: ChatMessage[];
+  } | null>(null);
+
+  // Load tool schemas once on mount so the Cowork view's trace can show
+  // accurate tier colors from day one, not just after visiting Debug Tools.
+  useEffect(() => {
+    handleListToolSchemas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleReadFile() {
     try {
@@ -242,7 +259,8 @@ function App() {
 
   async function handleDeleteFile() {
     const typed = window.prompt(
-      `PRIVILEGED ACTION — enforced by the backend, not just this dialog.\n\nThe agent wants to DELETE "${deleteFilePath}"${deleteRecursive ? " (and everything inside it)" : ""
+      `PRIVILEGED ACTION — enforced by the backend, not just this dialog.\n\nThe agent wants to DELETE "${deleteFilePath}"${
+        deleteRecursive ? " (and everything inside it)" : ""
       }.\n\nType the exact file/folder name to confirm:`
     );
 
@@ -490,26 +508,12 @@ function App() {
 
     if (result.status === "AwaitingConfirmation") {
       setAgentMessages(result.messages);
-      const approve = window.confirm(
-        `PRIVILEGED ACTION requested by the agent (backend-enforced, same checkpoint as everywhere else):\n\n${result.tool_name}\n${JSON.stringify(
-          result.arguments,
-          null,
-          2
-        )}\n\nApprove?`
-      );
-      if (approve) {
-        setAgentStatus(`Approved "${result.tool_name}" — resuming...`);
-        try {
-          const next = await callAgentStep(result.messages, true);
-          await processAgentResult(next);
-        } catch (err) {
-          setAgentStatus(`Error: ${err}`);
-          setAgentRunning(false);
-        }
-      } else {
-        setAgentStatus(`You declined "${result.tool_name}". Agent paused — click Run Agent again to start a fresh attempt.`);
-        setAgentRunning(false);
-      }
+      setPendingConfirmation({
+        tool_name: result.tool_name,
+        arguments: result.arguments,
+        messages: result.messages,
+      });
+      setAgentStatus(`Waiting for your approval on "${result.tool_name}"...`);
       return;
     }
 
@@ -525,6 +529,28 @@ function App() {
     setAgentRunning(false);
   }
 
+  async function handleApproveConfirmation() {
+    if (!pendingConfirmation) return;
+    const { messages: msgs, tool_name } = pendingConfirmation;
+    setPendingConfirmation(null);
+    setAgentStatus(`Approved "${tool_name}" — resuming...`);
+    try {
+      const next = await callAgentStep(msgs, true);
+      await processAgentResult(next);
+    } catch (err) {
+      setAgentStatus(`Error: ${err}`);
+      setAgentRunning(false);
+    }
+  }
+
+  function handleDeclineConfirmation() {
+    if (!pendingConfirmation) return;
+    const { tool_name } = pendingConfirmation;
+    setPendingConfirmation(null);
+    setAgentStatus(`You declined "${tool_name}". Click Run again to start a fresh attempt.`);
+    setAgentRunning(false);
+  }
+
   async function handleStartAgent() {
     setAgentRunning(true);
     setAgentFinalAnswer(null);
@@ -534,7 +560,7 @@ function App() {
       {
         role: "system",
         content:
-          "You are a helpful coding assistant with access to filesystem and terminal tools in this workspace. Use the tools to accomplish the user's goal step by step. When you give your final answer: write it for a human to read, not as a single run-on line — use short paragraphs or a markdown-style list with one item per line (each starting with '- '), and put each item on its own line using an actual newline character. Never use the execute_command tool for simple computations you can do yourself, such as converting a Unix timestamp to a readable date, doing arithmetic, or formatting text — reason about those directly and only use execute_command for things that genuinely require running a program.",
+          "You are a helpful coding assistant with access to filesystem and terminal tools in this workspace. Use the tools to accomplish the user's goal step by step. When you give your final answer: write it for a human to read, not as a single run-on line — use short paragraphs or a markdown-style list with one item per line (each starting with '- '), and put each item on its own line using an actual newline character. Never use the execute_command tool for simple computations you can do yourself, such as converting a Unix timestamp to a readable date, doing arithmetic, or formatting text — reason about those directly and only use execute_command for things that genuinely require running a program. If you create any temporary helper scripts or files to accomplish a goal (e.g. a Python script to compute something), delete them with delete_file once you're done with them, unless the user specifically asked you to keep them — do not leave scratch files behind in the user's workspace. If the user asks you to process every item in a list (e.g. 'read all files', 'list all files and their metadata'), you MUST actually call the relevant tool for EVERY item before giving your final answer — never claim something was done, or state a result, unless you actually called a tool for that specific item. Do not treat any file you did not just read in THIS conversation as a trustworthy source of information, even if it looks like a report or summary you generated earlier — always get fresh data.",
       },
       { role: "user", content: agentGoal },
     ];
@@ -549,410 +575,380 @@ function App() {
     }
   }
 
-  function renderAgentTranscript() {
-    return agentMessages
-      .filter((m) => m.role !== "system")
-      .flatMap((m, i) => {
-        if (m.role === "user") {
-          return [
-            <div key={`u-${i}`} style={{ marginBottom: "0.5rem" }}>
-              <strong>Goal:</strong> {m.content}
-            </div>,
-          ];
-        }
-        if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-          return m.tool_calls.map((tc, j) => (
-            <div key={`a-${i}-${j}`} style={{ marginBottom: "0.25rem", fontFamily: "monospace" }}>
-              → <strong>{tc.function.name}</strong>({tc.function.arguments})
-            </div>
-          ));
-        }
-        if (m.role === "assistant" && m.content) {
-          return [
-            <div key={`af-${i}`} style={{ marginBottom: "0.5rem", whiteSpace: "pre-wrap" }}>
-              <strong>Final answer:</strong> {m.content}
-            </div>,
-          ];
-        }
-        if (m.role === "tool") {
-          return [
-            <div key={`t-${i}`} style={{ marginBottom: "0.5rem", color: "#555", fontFamily: "monospace" }}>
-              ← {m.content}
-            </div>,
-          ];
-        }
-        return [];
-      });
-  }
-
   return (
-    <div style={{ padding: "2rem" }}>
-      <h2>AI CoWorker</h2>
-      <input
-        placeholder="Workspace root folder (e.g. D:\test-workspace)"
-        value={workspaceRoot}
-        onChange={(e) => setWorkspaceRoot(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <input
-        placeholder="Relative file path (e.g. notes.txt)"
-        value={filePath}
-        onChange={(e) => setFilePath(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <button type="button" onClick={handleReadFile}>Read File</button>
-      <pre style={{ marginTop: "1rem", whiteSpace: "pre-wrap" }}>{output}</pre>
+    <div className="window-shell">
+      <Titlebar />
+      <div className="app-shell">
+        <Sidebar activeView={activeView} onChangeView={setActiveView} />
+        <main className="main-area">
+          {activeView === "cowork" ? (
+            <CoworkView
+              workspaceRoot={workspaceRoot}
+              setWorkspaceRoot={setWorkspaceRoot}
+              agentGoal={agentGoal}
+              setAgentGoal={setAgentGoal}
+              agentApiKey={agentApiKey}
+              setAgentApiKey={setAgentApiKey}
+              agentModel={agentModel}
+              setAgentModel={setAgentModel}
+              agentMessages={agentMessages}
+              agentStatus={agentStatus}
+              agentRunning={agentRunning}
+              agentFinalAnswer={agentFinalAnswer}
+              toolSchemas={toolSchemas}
+              pendingConfirmation={pendingConfirmation}
+              onStart={handleStartAgent}
+              onApprove={handleApproveConfirmation}
+              onDecline={handleDeclineConfirmation}
+            />
+          ) : (
+            <div className="debug-view">
+              <h2>AI CoWorker — Debug Tools</h2>
+              <input
+                placeholder="Workspace root folder (e.g. D:\test-workspace)"
+                value={workspaceRoot}
+                onChange={(e) => setWorkspaceRoot(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <input
+                placeholder="Relative file path (e.g. notes.txt)"
+                value={filePath}
+                onChange={(e) => setFilePath(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <button type="button" onClick={handleReadFile}>Read File</button>
+              <pre style={{ marginTop: "1rem", whiteSpace: "pre-wrap" }}>{output}</pre>
 
-      <hr style={{ margin: "1.5rem 0" }} />
+              <hr style={{ margin: "1.5rem 0" }} />
 
-      <input
-        placeholder="Relative directory path (e.g. . for workspace root)"
-        value={dirPath}
-        onChange={(e) => setDirPath(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleListDirectory}>List Directory</button>
-      <ul>
-        {dirEntries.map((entry) => (
-          <li key={entry.name}>
-            {entry.is_directory ? "📁" : "📄"} {entry.name}
-          </li>
-        ))}
-      </ul>
+              <input
+                placeholder="Relative directory path (e.g. . for workspace root)"
+                value={dirPath}
+                onChange={(e) => setDirPath(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <button onClick={handleListDirectory}>List Directory</button>
+              <ul>
+                {dirEntries.map((entry) => (
+                  <li key={entry.name}>
+                    {entry.is_directory ? "📁" : "📄"} {entry.name}
+                  </li>
+                ))}
+              </ul>
 
-      <hr style={{ margin: "1.5rem 0" }} />
+              <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Write File (mutating)</h3>
-      <input
-        placeholder="Relative file path to write (e.g. new-note.txt)"
-        value={writeFilePath}
-        onChange={(e) => setWriteFilePath(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <textarea
-        placeholder="File content"
-        value={writeContent}
-        onChange={(e) => setWriteContent(e.target.value)}
-        style={{ width: "100%", height: "100px", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleWriteFile}>Write File</button>
-      <p style={{ marginTop: "0.5rem" }}>{writeStatus}</p>
+              <h3>Write File (mutating)</h3>
+              <input
+                placeholder="Relative file path to write (e.g. new-note.txt)"
+                value={writeFilePath}
+                onChange={(e) => setWriteFilePath(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <textarea
+                placeholder="File content"
+                value={writeContent}
+                onChange={(e) => setWriteContent(e.target.value)}
+                style={{ width: "100%", height: "100px", marginBottom: "0.5rem" }}
+              />
+              <button onClick={handleWriteFile}>Write File</button>
+              <p style={{ marginTop: "0.5rem" }}>{writeStatus}</p>
 
-      <hr style={{ margin: "1.5rem 0" }} />
+              <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Convert DOCX to PDF (mutating)</h3>
-      <input
-        placeholder="Relative .docx path to convert"
-        value={convertFilePath}
-        onChange={(e) => setConvertFilePath(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleConvertToPdf}>Convert to PDF</button>
-      <p style={{ marginTop: "0.5rem" }}>{convertStatus}</p>
+              <h3>Convert DOCX to PDF (mutating)</h3>
+              <input
+                placeholder="Relative .docx path to convert"
+                value={convertFilePath}
+                onChange={(e) => setConvertFilePath(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <button onClick={handleConvertToPdf}>Convert to PDF</button>
+              <p style={{ marginTop: "0.5rem" }}>{convertStatus}</p>
 
-      <hr style={{ margin: "1.5rem 0" }} />
+              <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Edit File (mutating)</h3>
-      <input
-        placeholder="Relative file path to edit"
-        value={editFilePath}
-        onChange={(e) => setEditFilePath(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <textarea
-        placeholder="Text to find (must match exactly, once)"
-        value={oldText}
-        onChange={(e) => setOldText(e.target.value)}
-        style={{ width: "100%", height: "60px", marginBottom: "0.5rem" }}
-      />
-      <textarea
-        placeholder="Replacement text"
-        value={newText}
-        onChange={(e) => setNewText(e.target.value)}
-        style={{ width: "100%", height: "60px", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleEditFile}>Edit File</button>
-      <p style={{ marginTop: "0.5rem" }}>{editStatus}</p>
+              <h3>Edit File (mutating)</h3>
+              <input
+                placeholder="Relative file path to edit"
+                value={editFilePath}
+                onChange={(e) => setEditFilePath(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <textarea
+                placeholder="Text to find (must match exactly, once)"
+                value={oldText}
+                onChange={(e) => setOldText(e.target.value)}
+                style={{ width: "100%", height: "60px", marginBottom: "0.5rem" }}
+              />
+              <textarea
+                placeholder="Replacement text"
+                value={newText}
+                onChange={(e) => setNewText(e.target.value)}
+                style={{ width: "100%", height: "60px", marginBottom: "0.5rem" }}
+              />
+              <button onClick={handleEditFile}>Edit File</button>
+              <p style={{ marginTop: "0.5rem" }}>{editStatus}</p>
 
-      <hr style={{ margin: "1.5rem 0" }} />
+              <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3 style={{ color: "#b00020" }}>Delete File/Folder (privileged — backend-enforced)</h3>
-      <input
-        placeholder="Relative path to delete"
-        value={deleteFilePath}
-        onChange={(e) => setDeleteFilePath(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <label style={{ display: "block", marginBottom: "0.5rem" }}>
-        <input
-          type="checkbox"
-          checked={deleteRecursive}
-          onChange={(e) => setDeleteRecursive(e.target.checked)}
-        />
-        {" "}Recursive (required for non-empty folders)
-      </label>
-      <button onClick={handleDeleteFile} style={{ color: "#b00020" }}>Delete</button>
-      <p style={{ marginTop: "0.5rem" }}>{deleteStatus}</p>
+              <h3 style={{ color: "#b00020" }}>Delete File/Folder (privileged — backend-enforced)</h3>
+              <input
+                placeholder="Relative path to delete"
+                value={deleteFilePath}
+                onChange={(e) => setDeleteFilePath(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={deleteRecursive}
+                  onChange={(e) => setDeleteRecursive(e.target.checked)}
+                />
+                {" "}Recursive (required for non-empty folders)
+              </label>
+              <button onClick={handleDeleteFile} style={{ color: "#b00020" }}>Delete</button>
+              <p style={{ marginTop: "0.5rem" }}>{deleteStatus}</p>
 
-      <hr style={{ margin: "1.5rem 0" }} />
+              <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Execute Terminal Command (risk-classified, privileged backend-enforced)</h3>
-      <input
-        placeholder="Command to run (e.g. dir, git status, npm test)"
-        value={command}
-        onChange={(e) => setCommand(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <button onClick={() => handleRunCommand(false)}>Run Command</button>
-      {runningJobId !== null && (
-        <button onClick={handleCancelCommand} style={{ marginLeft: "0.5rem", color: "#b00020" }}>
-          Cancel
-        </button>
-      )}
-      <p style={{ marginTop: "0.5rem" }}>{commandStatus}</p>
-      {commandResult && (
-        <div style={{ marginTop: "1rem" }}>
-          <p>
-            <strong>Risk level:</strong> {commandResult.risk_level} |{" "}
-            <strong>Exit code:</strong> {commandResult.exit_code ?? "N/A"} |{" "}
-            <strong>Timed out:</strong> {commandResult.timed_out ? "yes" : "no"}
-          </p>
-          <p><strong>stdout:</strong></p>
-          <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
-            {commandResult.stdout || "(empty)"}
-          </pre>
-          <p><strong>stderr:</strong></p>
-          <pre style={{ whiteSpace: "pre-wrap", background: "#fff0f0", padding: "0.5rem" }}>
-            {commandResult.stderr || "(empty)"}
-          </pre>
-        </div>
-      )}
-
-      <hr style={{ margin: "1.5rem 0" }} />
-
-      <h3>Create Directory (mutating)</h3>
-      <input
-        placeholder="Relative path for new directory"
-        value={newDirPath}
-        onChange={(e) => setNewDirPath(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleCreateDirectory}>Create Directory</button>
-      <p style={{ marginTop: "0.5rem" }}>{createDirStatus}</p>
-
-      <hr style={{ margin: "1.5rem 0" }} />
-
-      <h3>Move / Rename (mutating)</h3>
-      <input
-        placeholder="From"
-        value={moveFrom}
-        onChange={(e) => setMoveFrom(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <input
-        placeholder="To"
-        value={moveTo}
-        onChange={(e) => setMoveTo(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleMoveRename}>Move / Rename</button>
-      <p style={{ marginTop: "0.5rem" }}>{moveStatus}</p>
-
-      <hr style={{ margin: "1.5rem 0" }} />
-
-      <h3>Search Files (read-only)</h3>
-      <input
-        placeholder="Name pattern (optional)"
-        value={searchNamePattern}
-        onChange={(e) => setSearchNamePattern(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <input
-        placeholder="Content pattern (optional)"
-        value={searchContentPattern}
-        onChange={(e) => setSearchContentPattern(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleSearchFiles}>Search</button>
-      <p style={{ marginTop: "0.5rem" }}>{searchStatus}</p>
-      <ul>
-        {searchResults.map((r, i) => (
-          <li key={i}>{r.relative_path} — matched on {r.matched_on}</li>
-        ))}
-      </ul>
-
-      <hr style={{ margin: "1.5rem 0" }} />
-
-      <h3>Get File Metadata (read-only)</h3>
-      <input
-        placeholder="Relative path"
-        value={metadataPath}
-        onChange={(e) => setMetadataPath(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleGetMetadata}>Get Metadata</button>
-      <p style={{ marginTop: "0.5rem" }}>{metadataStatus}</p>
-      {metadataResult && (
-        <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
-          {JSON.stringify(metadataResult, null, 2)}
-        </pre>
-      )}
-
-      <hr style={{ margin: "1.5rem 0" }} />
-
-      <h3>Git Diff (read-only)</h3>
-      <button onClick={handleGitDiff}>Show Diff</button>
-      <p style={{ marginTop: "0.5rem" }}>{gitDiffStatus}</p>
-      {gitDiffResult && (
-        <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
-          {gitDiffResult.has_changes ? gitDiffResult.diff : "No changes."}
-        </pre>
-      )}
-
-      <hr style={{ margin: "1.5rem 0" }} />
-
-      <h3>Git Commit (mutating)</h3>
-      <input
-        placeholder="Commit message"
-        value={commitMessage}
-        onChange={(e) => setCommitMessage(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleGitCommit}>Stage All &amp; Commit</button>
-      <p style={{ marginTop: "0.5rem" }}>{commitStatus}</p>
-
-      <hr style={{ margin: "1.5rem 0" }} />
-
-      <h3>Audit Log (backend-generated, read-only)</h3>
-      <button onClick={handleGetAuditLog}>Refresh Audit Log</button>
-      <p style={{ marginTop: "0.5rem" }}>{auditLogStatus}</p>
-      <table style={{ width: "100%", marginTop: "0.5rem", borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ textAlign: "left", borderBottom: "1px solid #ccc" }}>
-            <th>Time</th>
-            <th>Tier</th>
-            <th>Action</th>
-            <th>Success</th>
-          </tr>
-        </thead>
-        <tbody>
-          {auditLog.map((entry, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
-              <td>{new Date(entry.timestamp_unix * 1000).toLocaleString()}</td>
-              <td style={{ color: entry.tier === "privileged" ? "#b00020" : "inherit" }}>
-                {entry.tier}
-              </td>
-              <td>{entry.action}</td>
-              <td>{entry.success ? "✅" : "❌"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <hr style={{ margin: "1.5rem 0" }} />
-
-      <h3 style={{ color: "#b00020" }}>Snapshots / Undo (privileged restore — backend-enforced)</h3>
-      <p style={{ fontSize: "0.85rem", color: "#666" }}>
-        A snapshot is taken automatically before every mutating/privileged action. Restoring
-        hard-resets the entire workspace to that point in time.
-      </p>
-      <button onClick={handleListSnapshots}>Refresh Snapshots</button>
-      <p style={{ marginTop: "0.5rem" }}>{snapshotStatus}</p>
-      <table style={{ width: "100%", marginTop: "0.5rem", borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ textAlign: "left", borderBottom: "1px solid #ccc" }}>
-            <th>Time</th>
-            <th>Message</th>
-            <th>Commit</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {snapshots.map((s) => (
-            <tr key={s.commit_hash} style={{ borderBottom: "1px solid #eee" }}>
-              <td>{new Date(s.timestamp_unix * 1000).toLocaleString()}</td>
-              <td>{s.message}</td>
-              <td style={{ fontFamily: "monospace" }}>{s.commit_hash.slice(0, 8)}</td>
-              <td>
-                <button
-                  onClick={() => handleRestoreSnapshot(s.commit_hash, s.message)}
-                  style={{ color: "#b00020" }}
-                >
-                  Restore
+              <h3>Execute Terminal Command (risk-classified, privileged backend-enforced)</h3>
+              <input
+                placeholder="Command to run (e.g. dir, git status, npm test)"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <button onClick={() => handleRunCommand(false)}>Run Command</button>
+              {runningJobId !== null && (
+                <button onClick={handleCancelCommand} style={{ marginLeft: "0.5rem", color: "#b00020" }}>
+                  Cancel
                 </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              )}
+              <p style={{ marginTop: "0.5rem" }}>{commandStatus}</p>
+              {commandResult && (
+                <div style={{ marginTop: "1rem" }}>
+                  <p>
+                    <strong>Risk level:</strong> {commandResult.risk_level} |{" "}
+                    <strong>Exit code:</strong> {commandResult.exit_code ?? "N/A"} |{" "}
+                    <strong>Timed out:</strong> {commandResult.timed_out ? "yes" : "no"}
+                  </p>
+                  <p><strong>stdout:</strong></p>
+                  <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
+                    {commandResult.stdout || "(empty)"}
+                  </pre>
+                  <p><strong>stderr:</strong></p>
+                  <pre style={{ whiteSpace: "pre-wrap", background: "#fff0f0", padding: "0.5rem" }}>
+                    {commandResult.stderr || "(empty)"}
+                  </pre>
+                </div>
+              )}
 
-      <hr style={{ margin: "1.5rem 0" }} />
+              <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Tool Registry (debug — schemas the agent loop will use)</h3>
-      <p style={{ fontSize: "0.85rem", color: "#666" }}>
-        The "tier" shown here is informational only — the backend independently re-checks and
-        enforces the real tier on every call, regardless of what a model claims.
-      </p>
-      <button onClick={handleListToolSchemas}>Load Tool Schemas</button>
-      <p style={{ marginTop: "0.5rem" }}>{toolSchemasStatus}</p>
-      {toolSchemas.map((t) => (
-        <details key={t.name} style={{ marginTop: "0.5rem" }}>
-          <summary>
-            <strong>{t.name}</strong>{" "}
-            <span
-              style={{
-                color:
-                  t.tier === "privileged" ? "#b00020" : t.tier === "mutating" ? "#a15c00" : "#2a7a2a",
-              }}
-            >
-              [{t.tier}]
-            </span>{" "}
-            — {t.description}
-          </summary>
-          <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
-            {JSON.stringify(t.parameters, null, 2)}
-          </pre>
-        </details>
-      ))}
+              <h3>Create Directory (mutating)</h3>
+              <input
+                placeholder="Relative path for new directory"
+                value={newDirPath}
+                onChange={(e) => setNewDirPath(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <button onClick={handleCreateDirectory}>Create Directory</button>
+              <p style={{ marginTop: "0.5rem" }}>{createDirStatus}</p>
 
-      <hr style={{ margin: "1.5rem 0" }} />
+              <hr style={{ margin: "1.5rem 0" }} />
 
-      <h3>Run Agent (ReAct loop — privileged actions still backend-enforced)</h3>
-      <p style={{ fontSize: "0.85rem", color: "#666" }}>
-        Leave API key blank to use GROQ_API_KEY from src-tauri/.env. Any privileged tool call the
-        agent wants to make still pauses here for your approval, exactly like the manual controls
-        above — the model has no way to skip that.
-      </p>
-      <input
-        placeholder="Groq API key (optional — falls back to .env)"
-        value={agentApiKey}
-        onChange={(e) => setAgentApiKey(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-        type="password"
-      />
-      <input
-        placeholder="Model (e.g. openai/gpt-oss-120b)"
-        value={agentModel}
-        onChange={(e) => setAgentModel(e.target.value)}
-        style={{ width: "100%", marginBottom: "0.5rem" }}
-      />
-      <textarea
-        placeholder="Goal (e.g. List the files in the workspace, then read the first one and tell me what it contains.)"
-        value={agentGoal}
-        onChange={(e) => setAgentGoal(e.target.value)}
-        style={{ width: "100%", height: "80px", marginBottom: "0.5rem" }}
-      />
-      <button onClick={handleStartAgent} disabled={agentRunning || !agentGoal || !workspaceRoot}>
-        {agentRunning ? "Running..." : "Run Agent"}
-      </button>
-      <p style={{ marginTop: "0.5rem" }}>{agentStatus}</p>
-      {agentFinalAnswer && (
-        <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#e8f5e9", whiteSpace: "pre-wrap" }}>
-          <strong>Final answer:</strong> {agentFinalAnswer}
-        </div>
-      )}
-      <div style={{ marginTop: "1rem", padding: "0.5rem", background: "#f5f5f5" }}>
-        {renderAgentTranscript()}
+              <h3>Move / Rename (mutating)</h3>
+              <input
+                placeholder="From"
+                value={moveFrom}
+                onChange={(e) => setMoveFrom(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <input
+                placeholder="To"
+                value={moveTo}
+                onChange={(e) => setMoveTo(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <button onClick={handleMoveRename}>Move / Rename</button>
+              <p style={{ marginTop: "0.5rem" }}>{moveStatus}</p>
+
+              <hr style={{ margin: "1.5rem 0" }} />
+
+              <h3>Search Files (read-only)</h3>
+              <input
+                placeholder="Name pattern (optional)"
+                value={searchNamePattern}
+                onChange={(e) => setSearchNamePattern(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <input
+                placeholder="Content pattern (optional)"
+                value={searchContentPattern}
+                onChange={(e) => setSearchContentPattern(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <button onClick={handleSearchFiles}>Search</button>
+              <p style={{ marginTop: "0.5rem" }}>{searchStatus}</p>
+              <ul>
+                {searchResults.map((r, i) => (
+                  <li key={i}>{r.relative_path} — matched on {r.matched_on}</li>
+                ))}
+              </ul>
+
+              <hr style={{ margin: "1.5rem 0" }} />
+
+              <h3>Get File Metadata (read-only)</h3>
+              <input
+                placeholder="Relative path"
+                value={metadataPath}
+                onChange={(e) => setMetadataPath(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <button onClick={handleGetMetadata}>Get Metadata</button>
+              <p style={{ marginTop: "0.5rem" }}>{metadataStatus}</p>
+              {metadataResult && (
+                <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
+                  {JSON.stringify(metadataResult, null, 2)}
+                </pre>
+              )}
+
+              <hr style={{ margin: "1.5rem 0" }} />
+
+              <h3>Git Diff (read-only)</h3>
+              <button onClick={handleGitDiff}>Show Diff</button>
+              <p style={{ marginTop: "0.5rem" }}>{gitDiffStatus}</p>
+              {gitDiffResult && (
+                <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem" }}>
+                  {gitDiffResult.has_changes ? gitDiffResult.diff : "No changes."}
+                </pre>
+              )}
+
+              <hr style={{ margin: "1.5rem 0" }} />
+
+              <h3>Git Commit (mutating)</h3>
+              <input
+                placeholder="Commit message"
+                value={commitMessage}
+                onChange={(e) => setCommitMessage(e.target.value)}
+                style={{ width: "100%", marginBottom: "0.5rem" }}
+              />
+              <button onClick={handleGitCommit}>Stage All &amp; Commit</button>
+              <p style={{ marginTop: "0.5rem" }}>{commitStatus}</p>
+
+              <hr style={{ margin: "1.5rem 0" }} />
+
+              <h3>Audit Log (backend-generated, read-only)</h3>
+              <button onClick={handleGetAuditLog}>Refresh Audit Log</button>
+              <p style={{ marginTop: "0.5rem" }}>{auditLogStatus}</p>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", marginTop: "0.5rem", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: "160px" }} />
+                    <col style={{ width: "90px" }} />
+                    <col />
+                    <col style={{ width: "70px" }} />
+                  </colgroup>
+                  <thead>
+                    <tr style={{ textAlign: "left", borderBottom: "1px solid #ccc" }}>
+                      <th>Time</th>
+                      <th>Tier</th>
+                      <th>Action</th>
+                      <th>Success</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {auditLog.map((entry, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
+                        <td>{new Date(entry.timestamp_unix * 1000).toLocaleString()}</td>
+                        <td style={{ color: entry.tier === "privileged" ? "#b00020" : "inherit" }}>
+                          {entry.tier}
+                        </td>
+                        <td style={{ wordBreak: "break-word", overflowWrap: "anywhere" }}>{entry.action}</td>
+                        <td>{entry.success ? "✅" : "❌"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <hr style={{ margin: "1.5rem 0" }} />
+
+              <h3 style={{ color: "#b00020" }}>Snapshots / Undo (privileged restore — backend-enforced)</h3>
+              <p style={{ fontSize: "0.85rem", color: "#666" }}>
+                A snapshot is taken automatically before every mutating/privileged action. Restoring
+                hard-resets the entire workspace to that point in time.
+              </p>
+              <button onClick={handleListSnapshots}>Refresh Snapshots</button>
+              <p style={{ marginTop: "0.5rem" }}>{snapshotStatus}</p>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", marginTop: "0.5rem", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: "160px" }} />
+                    <col />
+                    <col style={{ width: "90px" }} />
+                    <col style={{ width: "90px" }} />
+                  </colgroup>
+                  <thead>
+                    <tr style={{ textAlign: "left", borderBottom: "1px solid #ccc" }}>
+                      <th>Time</th>
+                      <th>Message</th>
+                      <th>Commit</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {snapshots.map((s) => (
+                      <tr key={s.commit_hash} style={{ borderBottom: "1px solid #eee" }}>
+                        <td>{new Date(s.timestamp_unix * 1000).toLocaleString()}</td>
+                        <td style={{ wordBreak: "break-word", overflowWrap: "anywhere" }}>{s.message}</td>
+                        <td style={{ fontFamily: "monospace" }}>{s.commit_hash.slice(0, 8)}</td>
+                        <td>
+                          <button
+                            onClick={() => handleRestoreSnapshot(s.commit_hash, s.message)}
+                            style={{ color: "#b00020" }}
+                          >
+                            Restore
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <hr style={{ margin: "1.5rem 0" }} />
+
+              <h3>Tool Registry (debug — schemas the agent loop will use)</h3>
+              <p style={{ fontSize: "0.85rem", color: "#666" }}>
+                The "tier" shown here is informational only — the backend independently re-checks and
+                enforces the real tier on every call, regardless of what a model claims.
+              </p>
+              <button onClick={handleListToolSchemas}>Load Tool Schemas</button>
+              <p style={{ marginTop: "0.5rem" }}>{toolSchemasStatus}</p>
+              {toolSchemas.map((t) => (
+                <details key={t.name} style={{ marginTop: "0.5rem" }}>
+                  <summary>
+                    <strong>{t.name}</strong>{" "}
+                    <span
+                      style={{
+                        color:
+                          t.tier === "privileged" ? "#b00020" : t.tier === "mutating" ? "#a15c00" : "#2a7a2a",
+                      }}
+                    >
+                      [{t.tier}]
+                    </span>{" "}
+                    — {t.description}
+                  </summary>
+                  <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "0.5rem", overflowX: "auto" }}>
+                    {JSON.stringify(t.parameters, null, 2)}
+                  </pre>
+                </details>
+              ))}
+            </div>
+          )}
+        </main>
       </div>
     </div>
   );
