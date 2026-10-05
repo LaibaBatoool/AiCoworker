@@ -36,7 +36,10 @@ pub fn dispatch_tool_call(
 
     match tool_name {
         "read_file" => crate::read_file_tool(ws, get_str(args, "relative_path")?).and_then(to_value),
-        "list_directory" => crate::list_directory_tool(ws, get_str(args, "relative_path")?).and_then(to_value),
+        "list_directory" => {
+            let include_metadata = get_bool(args, "include_metadata", false);
+            crate::list_directory_tool(ws, get_str(args, "relative_path")?, Some(include_metadata)).and_then(to_value)
+        }
         "search_files" => crate::search_files_tool(
             ws,
             get_opt_str(args, "name_pattern"),

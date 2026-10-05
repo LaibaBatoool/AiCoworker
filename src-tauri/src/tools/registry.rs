@@ -53,12 +53,13 @@ pub fn all_tool_schemas() -> Vec<ToolSchema> {
         ),
         tool(
             "list_directory",
-            "List the files and subfolders directly inside a directory.",
+            "List the files and subfolders directly inside a directory. Set include_metadata=true to get size, last-modified time, and read-only status for EVERY entry in this SAME call — prefer that over calling get_file_metadata separately for each file when you need metadata for more than one entry, since it is far more efficient.",
             "safe",
             json!({
                 "type": "object",
                 "properties": {
-                    "relative_path": { "type": "string", "description": "Directory path relative to the workspace root. Use '.' for the workspace root itself." }
+                    "relative_path": { "type": "string", "description": "Directory path relative to the workspace root. Use '.' for the workspace root itself." },
+                    "include_metadata": { "type": "boolean", "description": "If true, each returned entry also includes size_bytes, modified_unix_timestamp, and read_only. Default false." }
                 },
                 "required": ["relative_path"]
             }),
@@ -78,7 +79,7 @@ pub fn all_tool_schemas() -> Vec<ToolSchema> {
         ),
         tool(
             "get_file_metadata",
-            "Get size, type, last-modified time, and read-only status for a file or folder.",
+            "Get size, type, last-modified time, and read-only status for a SINGLE file or folder. If you need this for every file in a directory, use list_directory with include_metadata=true instead — it's one call instead of many.",
             "safe",
             json!({
                 "type": "object",
@@ -191,12 +192,12 @@ pub fn all_tool_schemas() -> Vec<ToolSchema> {
         ),
         tool(
             "execute_command",
-            "Run a shell command in the workspace directory. Actual risk tier is computed server-side by classify_command_risk and may require confirmation regardless of what is requested here.",
+            "Run a shell command in the workspace directory. IMPORTANT: this runs through Windows cmd.exe, NOT bash or PowerShell — heredoc/here-string syntax (<<, <<<, Python-style '<<PY ... PY') is NOT supported and will always fail with a syntax error. For any multi-line script or program, use write_file to create the script as its own file first, then run it with a single command (e.g. write_file 'script.py', then execute_command 'python script.py'). Actual risk tier is computed server-side by classify_command_risk and may require confirmation regardless of what is requested here.",
             "privileged",
             json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "The full shell command to run, e.g. 'npm test'." }
+                    "command": { "type": "string", "description": "The full shell command to run, e.g. 'npm test' or 'python script.py'." }
                 },
                 "required": ["command"]
             }),
