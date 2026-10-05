@@ -15,6 +15,10 @@ fn get_opt_str(args: &Value, key: &str) -> Option<String> {
     args.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
 }
 
+fn get_u32(args: &Value, key: &str, default: u32) -> u32 {
+    args.get(key).and_then(|v| v.as_u64()).map(|n| n as u32).unwrap_or(default)
+}
+
 fn to_value<T: serde::Serialize>(v: T) -> Result<Value, String> {
     serde_json::to_value(v).map_err(|e| format!("Failed to serialize tool result: {}", e))
 }
@@ -48,6 +52,11 @@ pub fn dispatch_tool_call(
         .and_then(to_value),
         "get_file_metadata" => crate::get_file_metadata_tool(ws, get_str(args, "relative_path")?).and_then(to_value),
         "git_diff" => crate::git_diff_tool(ws).and_then(to_value),
+        "git_status" => crate::git_status_tool(ws).and_then(to_value),
+        "git_log" => {
+            let max_count = get_u32(args, "max_count", 10);
+            crate::git_log_tool(ws, max_count).and_then(to_value)
+        }
         "list_snapshots" => crate::list_snapshots_tool(ws).and_then(to_value),
         "write_file" => crate::write_file_tool(ws, get_str(args, "relative_path")?, get_str(args, "content")?, confirmed).and_then(to_value),
         "edit_file" => crate::edit_file_tool(

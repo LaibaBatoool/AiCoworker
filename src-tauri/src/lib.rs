@@ -21,7 +21,7 @@ use tools::create_directory::create_directory;
 use tools::move_rename::move_rename;
 use tools::search_files::{search_files, SearchResult};
 use tools::file_metadata::{get_file_metadata, FileMetadata};
-use tools::git_ops::{git_diff, git_commit, GitDiffResult, GitCommitResult};
+use tools::git_ops::{git_diff, git_commit, git_status, git_log, GitDiffResult, GitCommitResult, GitStatusResult, GitLogEntry};
 use tools::command_classifier::classify_command_risk;
 use tools::snapshot::{take_snapshot, list_snapshots, restore_snapshot, SnapshotRecord};
 use tools::registry::{all_tool_schemas, ToolSchema};
@@ -82,6 +82,18 @@ fn get_file_metadata_tool(workspace_root: String, relative_path: String) -> Resu
 fn git_diff_tool(workspace_root: String) -> Result<GitDiffResult, String> {
     let ws = Workspace::new(&workspace_root)?;
     git_diff(&ws)
+}
+
+#[tauri::command]
+fn git_status_tool(workspace_root: String) -> Result<GitStatusResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    git_status(&ws)
+}
+
+#[tauri::command]
+fn git_log_tool(workspace_root: String, max_count: u32) -> Result<Vec<GitLogEntry>, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    git_log(&ws, max_count)
 }
 
 #[tauri::command]
@@ -270,7 +282,7 @@ fn start_command_tool(
     let ws = Workspace::new(&workspace_root)?;
     let tier = classify_command_risk(&command);
     let action = format!("execute_command: {}", command);
-    checkpoint(&tier, &action, confirmed)?;
+    checkpoint(&tier, &action, confirmed)?; // still blocks synchronously for privileged commands
     if tier != PermissionTier::Safe {
         snapshot_before(&ws, &action);
     }
@@ -365,6 +377,8 @@ pub fn run() {
             search_files_tool,
             get_file_metadata_tool,
             git_diff_tool,
+            git_status_tool,
+            git_log_tool,
             git_commit_tool,
             get_audit_log_tool,
             list_snapshots_tool,

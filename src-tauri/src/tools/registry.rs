@@ -96,6 +96,24 @@ pub fn all_tool_schemas() -> Vec<ToolSchema> {
             json!({ "type": "object", "properties": {}, "required": [] }),
         ),
         tool(
+            "git_status",
+            "List which files in the workspace's git repository are modified, added, deleted, renamed, or untracked right now, without showing their actual diff content. Use this to check what's changed before deciding whether to commit, or to answer questions like 'is this file tracked' or 'what's dirty in the repo'.",
+            "safe",
+            json!({ "type": "object", "properties": {}, "required": [] }),
+        ),
+        tool(
+            "git_log",
+            "List recent commits in the workspace's git repository: commit hash, author, timestamp, and message, most recent first.",
+            "safe",
+            json!({
+                "type": "object",
+                "properties": {
+                    "max_count": { "type": "integer", "description": "How many recent commits to return. Default 10, maximum 50." }
+                },
+                "required": []
+            }),
+        ),
+        tool(
             "list_snapshots",
             "List the agent's own auto-generated undo snapshots for this workspace, most recent first.",
             "safe",
