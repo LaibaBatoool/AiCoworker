@@ -15,3 +15,5 @@ pub mod file_metadata;
 pub mod git_ops;
 pub mod snapshot;
 pub mod registry;
+pub mod fetch_url;
+pub mod office_docs;

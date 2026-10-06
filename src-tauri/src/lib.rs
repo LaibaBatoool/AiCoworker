@@ -22,6 +22,8 @@ use tools::move_rename::move_rename;
 use tools::search_files::{search_files, SearchResult};
 use tools::file_metadata::{get_file_metadata, FileMetadata};
 use tools::git_ops::{git_diff, git_commit, git_status, git_log, GitDiffResult, GitCommitResult, GitStatusResult, GitLogEntry};
+use tools::fetch_url::{fetch_url, FetchUrlResult};
+use tools::office_docs::{create_docx, create_xlsx};
 use tools::command_classifier::classify_command_risk;
 use tools::snapshot::{take_snapshot, list_snapshots, restore_snapshot, SnapshotRecord};
 use tools::registry::{all_tool_schemas, ToolSchema};
@@ -94,6 +96,62 @@ fn git_status_tool(workspace_root: String) -> Result<GitStatusResult, String> {
 fn git_log_tool(workspace_root: String, max_count: u32) -> Result<Vec<GitLogEntry>, String> {
     let ws = Workspace::new(&workspace_root)?;
     git_log(&ws, max_count)
+}
+
+#[tauri::command]
+fn fetch_url_tool(workspace_root: String, url: String, confirmed: bool) -> Result<FetchUrlResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+
+    // Central permission checkpoint: refuses unconfirmed privileged actions with the
+    // standard PRIVILEGED_CONFIRMATION_REQUIRED error that the orchestrator turns into a dialog.
+    checkpoint(&PermissionTier::Privileged, &format!("fetch_url: {}", url), confirmed)?;
+
+    match fetch_url(&url) {
+        Ok(r) => {
+            log_action(&ws, &PermissionTier::Privileged, &format!("fetch_url: {}", url), true, "ok");
+            Ok(r)
+        }
+        Err(e) => {
+            log_action(&ws, &PermissionTier::Privileged, &format!("fetch_url: {}", url), false, &e);
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+fn create_docx_tool(
+    workspace_root: String,
+    relative_path: String,
+    blocks: serde_json::Value,
+    confirmed: bool,
+) -> Result<(), String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("create_docx: {}", relative_path);
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+
+    let result = create_docx(&ws, &relative_path, &blocks);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    result
+}
+
+#[tauri::command]
+fn create_xlsx_tool(
+    workspace_root: String,
+    relative_path: String,
+    sheet_name: Option<String>,
+    headers: serde_json::Value,
+    rows: serde_json::Value,
+    confirmed: bool,
+) -> Result<(), String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("create_xlsx: {}", relative_path);
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+
+    let result = create_xlsx(&ws, &relative_path, sheet_name, &headers, &rows);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    result
 }
 
 #[tauri::command]
@@ -379,6 +437,9 @@ pub fn run() {
             git_diff_tool,
             git_status_tool,
             git_log_tool,
+            fetch_url_tool,
+            create_docx_tool,
+            create_xlsx_tool,
             git_commit_tool,
             get_audit_log_tool,
             list_snapshots_tool,

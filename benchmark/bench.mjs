@@ -9,6 +9,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { NET_TASKS } from "./tasks-network.mjs";
+import { OFFICE_TASKS } from "./tasks-office.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const WS_ROOT = path.join(ROOT, "workspaces");
@@ -180,6 +182,8 @@ const TASKS = {
   },
 };
 
+Object.assign(TASKS, NET_TASKS, OFFICE_TASKS);
+
 // ---------- helpers ----------
 function loadResults() {
   try { return JSON.parse(fs.readFileSync(RESULTS, "utf8")); } catch { return []; }
@@ -198,12 +202,12 @@ function setup(id) {
   console.log(`Prompt    : ${t.prompt}\n`);
 }
 
-function verify(id) {
+async function verify(id) {
   const t = TASKS[id];
   if (!t) return console.log(`Unknown task: ${id}`);
   if (!fs.existsSync(wsPath(id)))
     return console.log(`[${id}] not set up — run: node benchmark/bench.mjs setup ${id}`);
-  const r = t.verify(wsPath(id));
+  const r = await t.verify(wsPath(id));
   console.log(`[${id}] ${r.status} — ${r.reason}`);
   if (t.note) console.log(`Manual check: ${t.note}`);
   if (r.status === "INCONCLUSIVE") {
@@ -236,7 +240,7 @@ function report() {
 const [cmd, arg] = process.argv.slice(2);
 if (cmd === "list") for (const [id, t] of Object.entries(TASKS)) console.log(`${id}  [${t.bucket}]  ${t.prompt}`);
 else if (cmd === "setup") (arg === "all" ? Object.keys(TASKS) : [arg]).forEach(setup);
-else if (cmd === "verify") verify(arg);
+else if (cmd === "verify") await verify(arg);
 else if (cmd === "report") report();
 else if (cmd === "reset") { fs.rmSync(RESULTS, { force: true }); console.log("results.json cleared"); }
 else console.log("Usage: node benchmark/bench.mjs <list|setup|verify|report|reset> [TASK_ID|all]");

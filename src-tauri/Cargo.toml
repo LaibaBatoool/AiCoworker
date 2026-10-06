@@ -25,8 +25,9 @@ zip = "8.6.0"
 lopdf = "0.45.0"
 image = "0.25.10"
 docx-rs = "0.4.22"
+rust_xlsxwriter = "0.79"
 wait-timeout = "0.2.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"

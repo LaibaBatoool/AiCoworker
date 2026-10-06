@@ -57,6 +57,23 @@ pub fn dispatch_tool_call(
             let max_count = get_u32(args, "max_count", 10);
             crate::git_log_tool(ws, max_count).and_then(to_value)
         }
+                "create_docx" => crate::create_docx_tool(
+            ws,
+            get_str(args, "relative_path")?,
+            args.get("blocks").cloned().unwrap_or(serde_json::Value::Null),
+            confirmed,
+        )
+        .and_then(to_value),
+        "create_xlsx" => crate::create_xlsx_tool(
+            ws,
+            get_str(args, "relative_path")?,
+            get_opt_str(args, "sheet_name"),
+            args.get("headers").cloned().unwrap_or(serde_json::Value::Null),
+            args.get("rows").cloned().unwrap_or(serde_json::Value::Null),
+            confirmed,
+        )
+        .and_then(to_value),
+        "fetch_url" => crate::fetch_url_tool(ws, get_str(args, "url")?, confirmed).and_then(to_value),
         "list_snapshots" => crate::list_snapshots_tool(ws).and_then(to_value),
         "write_file" => crate::write_file_tool(ws, get_str(args, "relative_path")?, get_str(args, "content")?, confirmed).and_then(to_value),
         "edit_file" => crate::edit_file_tool(
