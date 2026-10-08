@@ -54,3 +54,57 @@ impl Workspace {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Creates <tmp>/aicw_test_<tag>_<pid>/{ws, outside}; outside holds a canary file.
+    fn make_dirs(tag: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("aicw_test_{}_{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let ws = base.join("ws");
+        let outside = base.join("outside");
+        fs::create_dir_all(&ws).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("canary.txt"), "DO NOT TOUCH").unwrap();
+        (ws, outside)
+    }
+
+    #[test]
+    fn blocks_parent_traversal() {
+        let (ws_dir, outside) = make_dirs("traversal");
+        let ws = Workspace::new(ws_dir.to_str().unwrap()).unwrap();
+        for p in [
+            "../outside/canary.txt",
+            "../outside/new.txt",
+            "sub/../../outside/canary.txt",
+            "..\\outside\\canary.txt",
+            "..",
+        ] {
+            assert!(ws.resolve(p).is_err(), "should block: {}", p);
+        }
+        assert_eq!(fs::read_to_string(outside.join("canary.txt")).unwrap(), "DO NOT TOUCH");
+        let _ = fs::remove_dir_all(ws_dir.parent().unwrap());
+    }
+
+    #[test]
+    fn blocks_absolute_paths_outside() {
+        let (ws_dir, outside) = make_dirs("absolute");
+        let ws = Workspace::new(ws_dir.to_str().unwrap()).unwrap();
+        let abs = outside.join("canary.txt");
+        assert!(ws.resolve(abs.to_str().unwrap()).is_err());
+        let _ = fs::remove_dir_all(ws_dir.parent().unwrap());
+    }
+
+    #[test]
+    fn allows_paths_inside() {
+        let (ws_dir, _outside) = make_dirs("inside");
+        fs::create_dir(ws_dir.join("sub")).unwrap();
+        let ws = Workspace::new(ws_dir.to_str().unwrap()).unwrap();
+        assert!(ws.resolve("notes.txt").is_ok());
+        assert!(ws.resolve("sub/new.txt").is_ok());
+        let _ = fs::remove_dir_all(ws_dir.parent().unwrap());
+    }
+}

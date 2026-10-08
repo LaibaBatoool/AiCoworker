@@ -7,10 +7,13 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const RESULTS = path.join(ROOT, "results.json");
+const RUNS = path.join(ROOT, "runs.json");
 const OUT = path.join(ROOT, "report.html");
 
 let runs = [];
 try { runs = JSON.parse(fs.readFileSync(RESULTS, "utf8")); } catch { /* no results yet */ }
+let batch = [];
+try { batch = JSON.parse(fs.readFileSync(RUNS, "utf8")); } catch { /* no automatic runs yet */ }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0);
@@ -41,15 +44,39 @@ const historyRows = [...runs].reverse().map((r) =>
   <td><span class="pill ${r.status.toLowerCase()}">${esc(r.status)}</span></td><td class="dim">${esc(r.reason)}</td></tr>`
 ).join("");
 
+// ---- automatic runner (runs.json): pass rate over trials + efficiency metrics
+const byBatch = {};
+for (const r of batch) (byBatch[r.id] ||= []).push(r);
+const avg = (rs, k) => (rs.length ? rs.reduce((a, r) => a + (r[k] || 0), 0) / rs.length : 0);
+const batchRows = Object.entries(byBatch).map(([id, rs]) => {
+  const p = rs.filter((r) => r.verify_status === "PASS").length;
+  const f = rs.filter((r) => r.verify_status === "FAIL").length;
+  const inc = rs.filter((r) => r.verify_status === "INCONCLUSIVE").length;
+  const decided = p + f;
+  const cls = f > 0 ? "fail" : p > 0 ? "pass" : "";
+  return `<tr><td class="mono">${esc(id)}</td><td>${esc(rs[0].bucket)}</td><td>${rs.length}</td>
+  <td><span class="pill ${cls}">${decided ? `${p}/${decided}` : "–"}</span></td><td class="dim">${inc ? inc + " inconcl." : ""} ${rs.filter((r) => r.verify_status === "API_ERROR").length ? rs.filter((r) => r.verify_status === "API_ERROR").length + " API err" : ""}</td>
+  <td>${avg(rs, "seconds").toFixed(1)}s</td><td>${avg(rs, "tool_calls").toFixed(1)}</td>
+  <td>${avg(rs, "tool_errors").toFixed(1)}</td><td>${avg(rs, "confirmations").toFixed(1)}</td></tr>`;
+}).join("");
+const batchDecided = batch.filter((r) => r.verify_status === "PASS" || r.verify_status === "FAIL");
+const batchPass = batchDecided.filter((r) => r.verify_status === "PASS").length;
+const batchSummary = batch.length
+  ? `<div class="label" style="margin-bottom:12px">${batch.length} automatic trials · pass rate ${pct(batchPass, batchDecided.length)}% (${batchPass}/${batchDecided.length} decided) · avg ${avg(batch, "seconds").toFixed(1)}s and ${avg(batch, "tool_calls").toFixed(1)} tool calls per run · model ${esc(batch[batch.length - 1].model || "")}</div>`
+  : "";
+
 const bucketBars = buckets.map((b) => `
   <div class="bucket">
     <div class="row"><span>${esc(b.name)}</span><span class="dim">${b.runs ? `${b.passed}/${b.runs} · ${b.rate}%` : "no runs yet"}</span></div>
     <div class="bar"><div class="fill" style="width:${b.rate}%"></div></div>
   </div>`).join("");
 
-const safety = advFails === 0
-  ? `<div class="safe">0 safety violations across ${advRuns} adversarial run${advRuns === 1 ? "" : "s"}</div>`
-  : `<div class="unsafe">${advFails} adversarial FAIL${advFails === 1 ? "" : "s"} — review before claiming safety</div>`;
+const batchAdvFails = batch.filter((r) => r.bucket === "adversarial" && r.verify_status === "FAIL").length;
+const allAdvFails = advFails + batchAdvFails;
+const allAdvRuns = advRuns + batch.filter((r) => r.bucket === "adversarial").length;
+const safety = allAdvFails === 0
+  ? `<div class="safe">0 safety violations across ${allAdvRuns} adversarial run${allAdvRuns === 1 ? "" : "s"}</div>`
+  : `<div class="unsafe">${allAdvFails} adversarial FAIL${allAdvFails === 1 ? "" : "s"} — review before claiming safety</div>`;
 
 const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -88,8 +115,10 @@ const html = `<!doctype html>
   </div>
 
   <div class="card"><h2>Safety</h2>${safety}</div>
-  <div class="card"><h2>By bucket</h2>${bucketBars}</div>
-  <div class="card"><h2>Tasks</h2><div class="scroll"><table>
+  <div class="card"><h2>Automatic runs (repeated trials)</h2>${batchSummary}<div class="scroll"><table>
+    <tr><th>Task</th><th>Bucket</th><th>Trials</th><th>Pass</th><th>Inconcl.</th><th>Avg time</th><th>Avg calls</th><th>Avg tool errors</th><th>Avg confirms</th></tr>${batchRows || '<tr><td colspan="9" class="dim">No automatic runs yet — run: node benchmark/run.mjs</td></tr>'}</table></div></div>
+  <div class="card"><h2>By bucket (manual verifies)</h2>${bucketBars}</div>
+  <div class="card"><h2>Tasks (manual verifies)</h2><div class="scroll"><table>
     <tr><th>Task</th><th>Bucket</th><th>Passed</th><th>Latest</th><th>Reason</th></tr>${taskRows || '<tr><td colspan="5" class="dim">No runs yet</td></tr>'}</table></div></div>
   <div class="card"><h2>Run history</h2><div class="scroll"><table>
     <tr><th>Time</th><th>Task</th><th>Status</th><th>Reason</th></tr>${historyRows || '<tr><td colspan="4" class="dim">No runs yet</td></tr>'}</table></div></div>

@@ -1,7 +1,7 @@
 mod workspace;
 mod permission;
 mod tools;
-mod agent;
+pub mod agent;
 mod running_commands;
 
 use std::sync::Arc;
