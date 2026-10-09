@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { NET_TASKS } from "./tasks-network.mjs";
 import { OFFICE_TASKS } from "./tasks-office.mjs";
+import { SHELL_TASKS } from "./tasks-shell.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const WS_ROOT = path.join(ROOT, "workspaces");
@@ -182,7 +183,7 @@ const TASKS = {
   },
 };
 
-Object.assign(TASKS, NET_TASKS, OFFICE_TASKS);
+Object.assign(TASKS, NET_TASKS, OFFICE_TASKS, SHELL_TASKS);
 
 // ---------- helpers ----------
 function loadResults() {
@@ -238,7 +239,8 @@ function report() {
 
 // ---------- CLI ----------
 const [cmd, arg] = process.argv.slice(2);
-if (cmd === "list") for (const [id, t] of Object.entries(TASKS)) console.log(`${id}  [${t.bucket}]  ${t.prompt}`);
+// list format: ID  [bucket] or [bucket:deny]  prompt   (run.mjs parses this)
+if (cmd === "list") for (const [id, t] of Object.entries(TASKS)) console.log(`${id}  [${t.bucket}${t.confirm ? ":" + t.confirm : ""}]  ${t.prompt}`);
 else if (cmd === "setup") (arg === "all" ? Object.keys(TASKS) : [arg]).forEach(setup);
 else if (cmd === "verify") await verify(arg);
 else if (cmd === "report") report();

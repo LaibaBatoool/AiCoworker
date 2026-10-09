@@ -1,12 +1,15 @@
 //! Headless benchmark runner: drives the REAL orchestrator without the UI.
 //! Usage: bench_run <workspace> <model> <timeout_secs> <allow|deny> <prompt...>
 //! Prints one line:  BENCH_RESULT:{json}
+//! Also writes <workspace>/../agent_trace.json (every tool call the model made),
+//! so verifiers can tell "model refused without trying" from "backend blocked it".
 //! Confirmation policy: "allow" auto-approves every confirmation (a careless user),
-//! so the backend checks are what must stop dangerous actions.
+//! so the backend checks are what must stop dangerous actions. "deny" refuses the
+//! first confirmation and stops (a careful user).
 
 use aicoworker_lib::agent::model_client::{ChatMessage, OpenAiCompatibleClient};
 use aicoworker_lib::agent::orchestrator::{run_agent_loop, LoopOutcome};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
@@ -37,6 +40,8 @@ struct Run {
     messages: Vec<ChatMessage>,
     confirmations: u32,
     confirmed_tools: Vec<String>,
+    /// The tool + args that were waiting for confirmation when the run ended (deny mode).
+    pending: Option<(String, Value)>,
 }
 
 fn msg(role: &str, content: &str) -> ChatMessage {
@@ -55,29 +60,29 @@ async fn drive(client: &OpenAiCompatibleClient, workspace: &str, prompt: &str, a
     let mut confirmed_tools: Vec<String> = Vec::new();
 
     loop {
-        let this_resume = resume;
-        resume = false; // mirrors the UI: approval applies to one resume call only
+        // mirrors the UI: approval applies to one resume call only
+        let this_resume = std::mem::replace(&mut resume, false);
         match run_agent_loop(client, workspace, messages, this_resume).await {
             LoopOutcome::Done { messages: m, answer } => {
-                return Run { status: "done".into(), reason: String::new(), answer, messages: m, confirmations, confirmed_tools };
+                return Run { status: "done".into(), reason: String::new(), answer, messages: m, confirmations, confirmed_tools, pending: None };
             }
-            LoopOutcome::AwaitingConfirmation { messages: m, tool_name, .. } => {
-                confirmed_tools.push(tool_name);
+            LoopOutcome::AwaitingConfirmation { messages: m, tool_name, arguments } => {
+                confirmed_tools.push(tool_name.clone());
                 if !allow {
-                    return Run { status: "denied".into(), reason: "confirmation denied by harness".into(), answer: String::new(), messages: m, confirmations, confirmed_tools };
+                    return Run { status: "denied".into(), reason: "confirmation denied by harness".into(), answer: String::new(), messages: m, confirmations, confirmed_tools, pending: Some((tool_name, arguments)) };
                 }
                 if confirmations >= 25 {
-                    return Run { status: "stopped_safety".into(), reason: "too many confirmation requests".into(), answer: String::new(), messages: m, confirmations, confirmed_tools };
+                    return Run { status: "stopped_safety".into(), reason: "too many confirmation requests".into(), answer: String::new(), messages: m, confirmations, confirmed_tools, pending: None };
                 }
                 confirmations += 1;
                 messages = m;
                 resume = true;
             }
             LoopOutcome::StoppedForSafety { messages: m, reason } => {
-                return Run { status: "stopped_safety".into(), reason, answer: String::new(), messages: m, confirmations, confirmed_tools };
+                return Run { status: "stopped_safety".into(), reason, answer: String::new(), messages: m, confirmations, confirmed_tools, pending: None };
             }
             LoopOutcome::Error(e) => {
-                return Run { status: "error".into(), reason: e, answer: String::new(), messages: Vec::new(), confirmations, confirmed_tools };
+                return Run { status: "error".into(), reason: e, answer: String::new(), messages: Vec::new(), confirmations, confirmed_tools, pending: None };
             }
         }
     }
@@ -104,6 +109,42 @@ fn stats(messages: &[ChatMessage]) -> (u32, u32, u32, BTreeMap<String, u32>) {
         }
     }
     (turns, calls, errors, tools)
+}
+
+/// Every tool call the model requested, in order: [{name, arguments}].
+fn tool_call_list(messages: &[ChatMessage]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for m in messages {
+        if let Some(tc) = &m.tool_calls {
+            for c in tc {
+                let args: Value = serde_json::from_str(&c.function.arguments)
+                    .unwrap_or_else(|_| Value::String(c.function.arguments.clone()));
+                out.push(json!({ "name": c.function.name, "arguments": args }));
+            }
+        }
+    }
+    out
+}
+
+/// Writes <workspace>/../agent_trace.json. Best-effort: a failure here
+/// must never change the benchmark result itself.
+fn write_trace(workspace: &str, run: &Run) {
+    let Some(parent) = std::path::Path::new(workspace).parent() else { return };
+    let (pending_tool, pending_arguments) = match &run.pending {
+        Some((n, a)) => (json!(n), a.clone()),
+        None => (Value::Null, Value::Null),
+    };
+    let trace = json!({
+        "status": run.status,
+        "reason": run.reason,
+        "tool_calls": tool_call_list(&run.messages),
+        "confirmed_tools": run.confirmed_tools,
+        "pending_tool": pending_tool,
+        "pending_arguments": pending_arguments,
+    });
+    if let Ok(text) = serde_json::to_string_pretty(&trace) {
+        let _ = std::fs::write(parent.join("agent_trace.json"), text);
+    }
 }
 
 #[tokio::main]
@@ -140,6 +181,7 @@ async fn main() {
 
     let v = match outcome {
         Ok(run) => {
+            write_trace(&workspace, &run);
             let (turns, calls, errors, tools) = stats(&run.messages);
             json!({
                 "status": run.status,

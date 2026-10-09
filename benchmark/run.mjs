@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import dns from "node:dns/promises";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(ROOT, "..");
@@ -41,7 +42,10 @@ function listTasks() {
   const tasks = [];
   for (const line of out.split(/\r?\n/)) {
     const m = line.match(/^(\S+)\s+\[([^\]]+)\]\s+(.*)$/);
-    if (m) tasks.push({ id: m[1], bucket: m[2], prompt: m[3] });
+    if (m) {
+      const [bucket, taskConfirm] = m[2].split(":"); // e.g. "adversarial:deny"
+      tasks.push({ id: m[1], bucket, confirm: taskConfirm || null, prompt: m[3] });
+    }
   }
   return tasks;
 }
@@ -53,7 +57,8 @@ function loadRuns() {
 function runAgent(t) {
   bench(["setup", t.id]); // fresh workspace for every attempt
   const ws = path.join(ROOT, "workspaces", t.id, "ws");
-  const r = spawnSync(EXE, [ws, model, String(timeout), confirm, t.prompt], {
+  // a task can pin its own confirmation policy (A9/A9b: careful user = deny)
+  const r = spawnSync(EXE, [ws, model, String(timeout), t.confirm || confirm, t.prompt], {
     cwd: TAURI,
     encoding: "utf8",
     timeout: (timeout + 60) * 1000,
@@ -78,6 +83,16 @@ if (!fs.existsSync(EXE)) {
   process.exit(1);
 }
 
+// ---- 1b. network pre-flight: fail fast instead of burning ~7 minutes of retries
+try {
+  await dns.lookup("api.groq.com");
+} catch (e) {
+  console.error(`\nCan't reach api.groq.com (DNS lookup failed: ${e.code}). This is a network problem on this PC, not the agent.`);
+  console.error("Check:  Resolve-DnsName api.groq.com   and   Test-NetConnection api.groq.com -Port 443");
+  console.error("Nothing was run or recorded.");
+  process.exit(1);
+}
+
 // ---- 2. choose tasks
 let tasks = listTasks();
 if (only.length) tasks = tasks.filter((t) => only.includes(t.id));
@@ -93,8 +108,7 @@ let aborted = false;
 outer:
 for (const t of tasks) {
   for (let n = 1; n <= trials; n++) {
-    const label = `[${t.id} ${n}/${trials}]`;
-
+    const label = `[${t.id} ${n}/${trials}${t.confirm ? " confirm:" + t.confirm : ""}]`;
     // run the real agent, retrying when the API itself failed
     let res = runAgent(t);
     let attempt = 0;
@@ -121,7 +135,7 @@ for (const t of tasks) {
     }
 
     const rec = {
-      id: t.id, bucket: t.bucket, trial: n, at: new Date().toISOString(), model,
+      id: t.id, bucket: t.bucket, trial: n, at: new Date().toISOString(), model, confirm: t.confirm || confirm,
       agent_status: res.status, agent_reason: res.reason || "",
       seconds: Number((res.seconds || 0).toFixed(1)),
       model_turns: res.model_turns || 0, tool_calls: res.tool_calls || 0, tool_errors: res.tool_errors || 0,
@@ -135,8 +149,15 @@ for (const t of tasks) {
     console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${verifyStatus}${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
 
     if (apiErrorStreak >= 3) {
-      console.log("\nSTOPPING EARLY: 3 API failures in a row. This usually means the free-tier rate/daily limit is used up.");
-      console.log("Wait a while (or use another key / model with --model), then run again. Finished trials are already saved.");
+            const lastReason = String(session[session.length - 1]?.verify_reason || "");
+      if (/dns error|connect|timed out|network/i.test(lastReason)) {
+        console.log("\nSTOPPING EARLY: 3 API failures in a row, and they look like a NETWORK/DNS problem on this PC (not a rate limit).");
+        console.log("Check:  Resolve-DnsName api.groq.com   then run again. Finished trials are already saved.");
+      } else {
+        console.log("\nSTOPPING EARLY: 3 API failures in a row. This usually means the free-tier rate/daily limit is used up.");
+        console.log("Wait a while (or use another key / model with --model), then run again. Finished trials are already saved.");
+      }
+      console.log("Finished trials are already saved.");
       aborted = true;
       break outer;
     }
