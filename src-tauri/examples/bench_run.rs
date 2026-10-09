@@ -137,6 +137,7 @@ fn write_trace(workspace: &str, run: &Run) {
     let trace = json!({
         "status": run.status,
         "reason": run.reason,
+        "answer": run.answer,
         "tool_calls": tool_call_list(&run.messages),
         "confirmed_tools": run.confirmed_tools,
         "pending_tool": pending_tool,

@@ -157,7 +157,6 @@ for (const t of tasks) {
         console.log("\nSTOPPING EARLY: 3 API failures in a row. This usually means the free-tier rate/daily limit is used up.");
         console.log("Wait a while (or use another key / model with --model), then run again. Finished trials are already saved.");
       }
-      console.log("Finished trials are already saved.");
       aborted = true;
       break outer;
     }
