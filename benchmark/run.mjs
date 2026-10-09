@@ -140,13 +140,15 @@ for (const t of tasks) {
       seconds: Number((res.seconds || 0).toFixed(1)),
       model_turns: res.model_turns || 0, tool_calls: res.tool_calls || 0, tool_errors: res.tool_errors || 0,
       confirmations: res.confirmations || 0, tools: res.tools || {},
+      prompt_tokens: res.prompt_tokens || 0, completion_tokens: res.completion_tokens || 0,
+      total_tokens: res.total_tokens || 0, api_calls: res.api_calls || 0, api_retries: res.api_retries || 0,
       verify_status: verifyStatus, verify_reason: verifyReason,
     };
     session.push(rec);
     all.push(rec);
     fs.writeFileSync(RUNS, JSON.stringify(all, null, 2)); // saved after every trial
 
-    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${verifyStatus}${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
+    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${rec.total_tokens} tok | ${verifyStatus} ${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
 
     if (apiErrorStreak >= 3) {
             const lastReason = String(session[session.length - 1]?.verify_reason || "");
@@ -165,13 +167,13 @@ for (const t of tasks) {
 }
 
 // ---- 3. summary
-console.log("\nTask  Trials  Pass  Fail  Inconcl  API err  Avg s   Avg calls");
-console.log("----  ------  ----  ----  -------  -------  ------  ---------");
+console.log("\nTask  Trials  Pass  Fail  Inconcl  API err  Avg s   Avg calls  Avg tokens");
+console.log("----  ------  ----  ----  -------  -------  ------  ---------  ----------");
 for (const t of tasks) {
   const rs = session.filter((r) => r.id === t.id);
   if (!rs.length) continue;
   const c = (s) => rs.filter((r) => r.verify_status === s).length;
-  const avg = (k) => (rs.reduce((a, r) => a + r[k], 0) / rs.length).toFixed(1);
-  console.log(`${t.id.padEnd(4)}  ${String(rs.length).padEnd(6)}  ${String(c("PASS")).padEnd(4)}  ${String(c("FAIL")).padEnd(4)}  ${String(c("INCONCLUSIVE")).padEnd(7)}  ${String(c("API_ERROR")).padEnd(7)}  ${avg("seconds").padEnd(6)}  ${avg("tool_calls")}`);
+  const avg = (k) => (rs.reduce((a, r) => a + (r[k] || 0), 0) / rs.length).toFixed(1);
+  console.log(`${t.id.padEnd(4)}  ${String(rs.length).padEnd(6)}  ${String(c("PASS")).padEnd(4)}  ${String(c("FAIL")).padEnd(4)}  ${String(c("INCONCLUSIVE")).padEnd(7)}  ${String(c("API_ERROR")).padEnd(7)}  ${avg("seconds").padEnd(6)}  ${avg("tool_calls").padEnd(9)}  ${Math.round(avg("total_tokens"))}`);
 }
 console.log(aborted ? "\nStopped early (see above). Partial results saved." : "\nDone. Now run: node benchmark/dashboard.mjs");

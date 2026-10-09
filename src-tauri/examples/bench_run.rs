@@ -179,8 +179,9 @@ async fn main() {
     )
     .await;
     let seconds = started.elapsed().as_secs_f64();
+    let usage = client.usage();
 
-    let v = match outcome {
+    let mut v = match outcome {
         Ok(run) => {
             write_trace(&workspace, &run);
             let (turns, calls, errors, tools) = stats(&run.messages);
@@ -199,5 +200,10 @@ async fn main() {
         }
         Err(_) => json!({ "status": "timeout", "reason": format!("exceeded {}s", timeout_secs), "seconds": seconds }),
     };
+    v["prompt_tokens"] = json!(usage.prompt_tokens);
+    v["completion_tokens"] = json!(usage.completion_tokens);
+    v["total_tokens"] = json!(usage.total_tokens);
+    v["api_calls"] = json!(usage.api_calls);
+    v["api_retries"] = json!(usage.api_retries);
     println!("BENCH_RESULT:{}", v);
 }

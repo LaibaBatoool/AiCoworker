@@ -57,6 +57,24 @@ pub struct OpenAiCompatibleClient {
     pub base_url: String,
     pub api_key: Option<String>, // None for local Ollama — no key needed
     pub model: String,
+    /// Running token/request totals for everything this client has sent.
+    /// Read it with `usage()`. A Mutex (not &mut self) so the
+    /// ModelClient trait and the orchestrator don't have to change.
+    usage: std::sync::Mutex<TokenUsage>,
+}
+
+/// Token + request counters, summed over every successful model call.
+/// Groq and Ollama both return an OpenAI-style `usage` object; if a
+/// provider leaves it out, the token fields simply stay 0.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    /// Successful chat-completion responses.
+    pub api_calls: u64,
+    /// Automatic retries (429 rate limits, tool_use_failed, connection drops).
+    pub api_retries: u64,
 }
 
 impl OpenAiCompatibleClient {
@@ -65,6 +83,7 @@ impl OpenAiCompatibleClient {
             base_url: "https://api.groq.com/openai/v1".to_string(),
             api_key: Some(api_key),
             model: model.into(),
+            usage: Default::default(),
         }
     }
 
@@ -73,6 +92,28 @@ impl OpenAiCompatibleClient {
             base_url: "http://localhost:11434/v1".to_string(),
             api_key: None,
             model: model.into(),
+            usage: Default::default(),
+        }
+    }
+
+    /// Snapshot of the totals so far (for the benchmark / UI).
+    pub fn usage(&self) -> TokenUsage {
+        self.usage.lock().map(|u| u.clone()).unwrap_or_default()
+    }
+
+    fn record_success(&self, raw: &Value) {
+        let n = |k: &str| raw.pointer(&format!("/usage/{}", k)).and_then(|v| v.as_u64()).unwrap_or(0);
+        if let Ok(mut u) = self.usage.lock() {
+            u.prompt_tokens += n("prompt_tokens");
+            u.completion_tokens += n("completion_tokens");
+            u.total_tokens += n("total_tokens");
+            u.api_calls += 1;
+        }
+    }
+
+    fn record_retry(&self) {
+        if let Ok(mut u) = self.usage.lock() {
+            u.api_retries += 1;
         }
     }
 }
@@ -203,6 +244,7 @@ impl ModelClient for OpenAiCompatibleClient {
                             "Model API connection failed ({}), retrying in 2s (attempt {}/{})",
                             describe_reqwest_error(&e), attempt, MAX_ATTEMPTS
                         );
+                        self.record_retry();
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         continue;
                     }
@@ -228,6 +270,7 @@ impl ModelClient for OpenAiCompatibleClient {
             };
 
             if status.is_success() {
+                self.record_success(&raw);
                 break raw;
             }
 
@@ -258,6 +301,7 @@ impl ModelClient for OpenAiCompatibleClient {
                         "Model API {} ({}), retrying in {:.1}s (attempt {}/{})",
                         status, code, w, attempt, MAX_ATTEMPTS
                     );
+                    self.record_retry();
                     tokio::time::sleep(std::time::Duration::from_secs_f64(w)).await;
                     continue;
                 }
