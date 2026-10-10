@@ -181,6 +181,33 @@ pub fn all_tool_schemas() -> Vec<ToolSchema> {
             }),
         ),
         tool(
+            "merge_pdfs",
+            "Merge two or more PDF files from the workspace into ONE new PDF, keeping the exact order given. The output file must not already exist. Encrypted PDFs are refused. Bookmarks and form fields are not carried over.",
+            "mutating",
+            json!({
+                "type": "object",
+                "properties": {
+                    "source_relative_paths": { "type": "array", "items": { "type": "string" }, "description": "PDF files to merge, in the order their pages should appear (2 to 50 files)." },
+                    "output_relative_path": { "type": "string", "description": "Path of the new merged PDF. Must end with .pdf and must not exist yet." }
+                },
+                "required": ["source_relative_paths", "output_relative_path"]
+            }),
+        ),
+        tool(
+            "extract_pdf_pages",
+            "Copy selected pages of a PDF into a NEW PDF (the original is not changed). Use it to split a PDF or pull out a few pages. Pages keep their original order.",
+            "mutating",
+            json!({
+                "type": "object",
+                "properties": {
+                    "relative_path": { "type": "string", "description": "Source PDF inside the workspace." },
+                    "pages": { "type": "string", "description": "1-based pages/ranges, e.g. \"2-4\", \"1,3,5\" or \"6-\" (6 to the end)." },
+                    "output_relative_path": { "type": "string", "description": "Path of the new PDF. Must end with .pdf and must not exist yet." }
+                },
+                "required": ["relative_path", "pages", "output_relative_path"]
+            }),
+        ),
+        tool(
             "extract_archive",
             "Extract a .zip archive that is inside the workspace into a folder (created if missing; default is the workspace root). If any entry has an unsafe path (.., absolute paths, drive letters, links) the WHOLE archive is rejected and nothing is extracted. Never overwrites existing files: if names clash, extract into a new folder.",
             "mutating",

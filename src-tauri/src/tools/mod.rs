@@ -19,3 +19,4 @@ pub mod fetch_url;
 pub mod office_docs;
 pub mod archive;
 pub mod read_spreadsheet;
+pub mod pdf_pages;

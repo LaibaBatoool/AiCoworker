@@ -26,6 +26,7 @@ use tools::fetch_url::{fetch_url, FetchUrlResult};
 use tools::office_docs::{create_docx, create_xlsx};
 use tools::archive::{create_archive, extract_archive, CreateArchiveResult, ExtractResult};
 use tools::read_spreadsheet::{read_spreadsheet, SpreadsheetData};
+use tools::pdf_pages::{extract_pdf_pages, merge_pdfs, PdfPagesResult};
 use tools::command_classifier::classify_command_risk;
 use tools::snapshot::{take_snapshot, list_snapshots, restore_snapshot, SnapshotRecord};
 use tools::registry::{all_tool_schemas, ToolSchema};
@@ -199,6 +200,41 @@ fn create_archive_tool(
     snapshot_before(&ws, &action);
 
     let result = create_archive(&ws, &source_relative_paths, &archive_relative_path);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    result
+}
+
+#[tauri::command]
+fn merge_pdfs_tool(
+    workspace_root: String,
+    source_relative_paths: Vec<String>,
+    output_relative_path: String,
+    confirmed: bool,
+) -> Result<PdfPagesResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("merge_pdfs: {} <- {}", output_relative_path, source_relative_paths.join(", "));
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+
+    let result = merge_pdfs(&ws, &source_relative_paths, &output_relative_path);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    result
+}
+
+#[tauri::command]
+fn extract_pdf_pages_tool(
+    workspace_root: String,
+    relative_path: String,
+    pages: String,
+    output_relative_path: String,
+    confirmed: bool,
+) -> Result<PdfPagesResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("extract_pdf_pages: {} [{}] -> {}", relative_path, pages, output_relative_path);
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+
+    let result = extract_pdf_pages(&ws, &relative_path, &pages, &output_relative_path);
     log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
     result
 }
@@ -492,6 +528,8 @@ pub fn run() {
             create_xlsx_tool,
             extract_archive_tool,
             create_archive_tool,
+            merge_pdfs_tool,
+            extract_pdf_pages_tool,
             git_commit_tool,
             get_audit_log_tool,
             list_snapshots_tool,

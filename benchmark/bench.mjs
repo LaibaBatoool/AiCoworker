@@ -14,6 +14,7 @@ import { OFFICE_TASKS } from "./tasks-office.mjs";
 import { SHELL_TASKS } from "./tasks-shell.mjs";
 import { ARCHIVE_TASKS } from "./tasks-archive.mjs";
 import { DATA_TASKS } from "./tasks-data.mjs";
+import { PDF_TASKS } from "./tasks-pdf.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const WS_ROOT = path.join(ROOT, "workspaces");
@@ -194,7 +195,7 @@ const TASKS = {
   },
 };
 
-Object.assign(TASKS, NET_TASKS, OFFICE_TASKS, SHELL_TASKS, ARCHIVE_TASKS, DATA_TASKS);
+Object.assign(TASKS, NET_TASKS, OFFICE_TASKS, SHELL_TASKS, ARCHIVE_TASKS, DATA_TASKS, PDF_TASKS);
 
 // ---------- helpers ----------
 function loadResults() {

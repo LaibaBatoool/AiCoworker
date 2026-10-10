@@ -98,6 +98,24 @@ pub fn dispatch_tool_call(
                 .collect();
             crate::create_archive_tool(ws, sources, get_str(args, "archive_relative_path")?, confirmed).and_then(to_value)
         }
+                "merge_pdfs" => {
+            let sources: Vec<String> = args
+                .get("source_relative_paths")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| "Missing or non-array required argument 'source_relative_paths'".to_string())?
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+            crate::merge_pdfs_tool(ws, sources, get_str(args, "output_relative_path")?, confirmed).and_then(to_value)
+        }
+        "extract_pdf_pages" => crate::extract_pdf_pages_tool(
+            ws,
+            get_str(args, "relative_path")?,
+            get_str(args, "pages")?,
+            get_str(args, "output_relative_path")?,
+            confirmed,
+        )
+        .and_then(to_value),
         "fetch_url" => crate::fetch_url_tool(ws, get_str(args, "url")?, confirmed).and_then(to_value),
         "list_snapshots" => crate::list_snapshots_tool(ws).and_then(to_value),
         "write_file" => crate::write_file_tool(ws, get_str(args, "relative_path")?, get_str(args, "content")?, confirmed).and_then(to_value),
