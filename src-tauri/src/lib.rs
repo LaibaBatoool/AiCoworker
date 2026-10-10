@@ -25,6 +25,7 @@ use tools::git_ops::{git_diff, git_commit, git_status, git_log, GitDiffResult, G
 use tools::fetch_url::{fetch_url, FetchUrlResult};
 use tools::office_docs::{create_docx, create_xlsx};
 use tools::archive::{create_archive, extract_archive, CreateArchiveResult, ExtractResult};
+use tools::read_spreadsheet::{read_spreadsheet, SpreadsheetData};
 use tools::command_classifier::classify_command_risk;
 use tools::snapshot::{take_snapshot, list_snapshots, restore_snapshot, SnapshotRecord};
 use tools::registry::{all_tool_schemas, ToolSchema};
@@ -53,6 +54,18 @@ fn snapshot_before(ws: &Workspace, label: &str) {
 fn read_file_tool(workspace_root: String, relative_path: String) -> Result<String, String> {
     let ws = Workspace::new(&workspace_root)?;
     read_file(&ws, &relative_path)
+}
+
+#[tauri::command]
+fn read_spreadsheet_tool(
+    workspace_root: String,
+    relative_path: String,
+    sheet_name: Option<String>,
+    start_row: Option<usize>,
+    max_rows: Option<usize>,
+) -> Result<SpreadsheetData, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    read_spreadsheet(&ws, &relative_path, sheet_name.as_deref(), start_row, max_rows)
 }
 
 #[tauri::command]
@@ -458,6 +471,7 @@ pub fn run() {
         .manage(Arc::new(RunningCommands::default()))
         .invoke_handler(tauri::generate_handler![
             read_file_tool,
+            read_spreadsheet_tool,
             list_directory_tool,
             write_file_tool,
             convert_to_pdf_tool,

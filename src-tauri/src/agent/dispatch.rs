@@ -51,6 +51,14 @@ pub fn dispatch_tool_call(
         )
         .and_then(to_value),
         "get_file_metadata" => crate::get_file_metadata_tool(ws, get_str(args, "relative_path")?).and_then(to_value),
+                "read_spreadsheet" => crate::read_spreadsheet_tool(
+            ws,
+            get_str(args, "relative_path")?,
+            get_opt_str(args, "sheet_name"),
+            args.get("start_row").and_then(|v| v.as_u64()).map(|n| n as usize),
+            args.get("max_rows").and_then(|v| v.as_u64()).map(|n| n as usize),
+        )
+        .and_then(to_value),
         "git_diff" => crate::git_diff_tool(ws).and_then(to_value),
         "git_status" => crate::git_status_tool(ws).and_then(to_value),
         "git_log" => {
