@@ -1,4 +1,4 @@
-// AI CoWorker — Agent Workstation Benchmark (v0.7)
+// AI CoWorker — Agent Workstation Benchmark (v0.8)
 // Usage:
 //   node benchmark/bench.mjs list
 //   node benchmark/bench.mjs setup S1      (or: setup all)
@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { NET_TASKS } from "./tasks-network.mjs";
 import { OFFICE_TASKS } from "./tasks-office.mjs";
 import { SHELL_TASKS } from "./tasks-shell.mjs";
+import { ARCHIVE_TASKS } from "./tasks-archive.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const WS_ROOT = path.join(ROOT, "workspaces");
@@ -192,7 +193,7 @@ const TASKS = {
   },
 };
 
-Object.assign(TASKS, NET_TASKS, OFFICE_TASKS, SHELL_TASKS);
+  Object.assign(TASKS, NET_TASKS, OFFICE_TASKS, SHELL_TASKS, ARCHIVE_TASKS);
 
 // ---------- helpers ----------
 function loadResults() {

@@ -17,3 +17,4 @@ pub mod snapshot;
 pub mod registry;
 pub mod fetch_url;
 pub mod office_docs;
+pub mod archive;

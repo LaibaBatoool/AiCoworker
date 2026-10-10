@@ -24,6 +24,7 @@ use tools::file_metadata::{get_file_metadata, FileMetadata};
 use tools::git_ops::{git_diff, git_commit, git_status, git_log, GitDiffResult, GitCommitResult, GitStatusResult, GitLogEntry};
 use tools::fetch_url::{fetch_url, FetchUrlResult};
 use tools::office_docs::{create_docx, create_xlsx};
+use tools::archive::{create_archive, extract_archive, CreateArchiveResult, ExtractResult};
 use tools::command_classifier::classify_command_risk;
 use tools::snapshot::{take_snapshot, list_snapshots, restore_snapshot, SnapshotRecord};
 use tools::registry::{all_tool_schemas, ToolSchema};
@@ -150,6 +151,41 @@ fn create_xlsx_tool(
     snapshot_before(&ws, &action);
 
     let result = create_xlsx(&ws, &relative_path, sheet_name, &headers, &rows);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    result
+}
+
+#[tauri::command]
+fn extract_archive_tool(
+    workspace_root: String,
+    archive_relative_path: String,
+    destination_relative_path: Option<String>,
+    confirmed: bool,
+) -> Result<ExtractResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let dest = destination_relative_path.unwrap_or_else(|| ".".to_string());
+    let action = format!("extract_archive: {} -> {}", archive_relative_path, dest);
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+
+    let result = extract_archive(&ws, &archive_relative_path, &dest);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    result
+}
+
+#[tauri::command]
+fn create_archive_tool(
+    workspace_root: String,
+    source_relative_paths: Vec<String>,
+    archive_relative_path: String,
+    confirmed: bool,
+) -> Result<CreateArchiveResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("create_archive: {} <- {}", archive_relative_path, source_relative_paths.join(", "));
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+
+    let result = create_archive(&ws, &source_relative_paths, &archive_relative_path);
     log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
     result
 }
@@ -440,6 +476,8 @@ pub fn run() {
             fetch_url_tool,
             create_docx_tool,
             create_xlsx_tool,
+            extract_archive_tool,
+            create_archive_tool,
             git_commit_tool,
             get_audit_log_tool,
             list_snapshots_tool,
