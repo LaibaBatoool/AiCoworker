@@ -60,6 +60,7 @@ function runAgent(t) {
   // a task can pin its own confirmation policy (A9/A9b: careful user = deny)
   const r = spawnSync(EXE, [ws, model, String(timeout), t.confirm || confirm, t.prompt], {
     cwd: TAURI,
+    env: { ...process.env, AICOWORKER_NO_LAUNCH: "1" }, // open_in_default_app validates but never launches
     encoding: "utf8",
     timeout: (timeout + 60) * 1000,
     maxBuffer: 50e6,
@@ -83,14 +84,31 @@ if (!fs.existsSync(EXE)) {
   process.exit(1);
 }
 
-// ---- 1b. network pre-flight: fail fast instead of burning ~7 minutes of retries
-try {
-  await dns.lookup("api.groq.com");
-} catch (e) {
-  console.error(`\nCan't reach api.groq.com (DNS lookup failed: ${e.code}). This is a network problem on this PC, not the agent.`);
-  console.error("Check:  Resolve-DnsName api.groq.com   and   Test-NetConnection api.groq.com -Port 443");
-  console.error("Nothing was run or recorded.");
-  process.exit(1);
+// ---- 1b. pre-flight: fail fast instead of burning minutes of retries
+const localModel = model.startsWith("ollama:") ? model.slice("ollama:".length) : null;
+if (localModel) {
+  // local model: Ollama must be running and the model must be pulled
+  let names = null;
+  try {
+    const r = await fetch("http://127.0.0.1:11434/api/tags", { signal: AbortSignal.timeout(3000) });
+    names = ((await r.json()).models || []).map((m) => m.name);
+  } catch {
+    console.error("\nOllama isn't reachable on 127.0.0.1:11434. Start the Ollama app (or run: ollama serve), then re-run.");
+    process.exit(1);
+  }
+  if (!names.includes(localModel) && !names.includes(localModel + ":latest")) {
+    console.error(`\nOllama is running but has no model "${localModel}". Installed: ${names.join(", ") || "(none)"}`);
+    process.exit(1);
+  }
+} else {
+  try {
+    await dns.lookup("api.groq.com");
+  } catch (e) {
+    console.error(`\nCan't reach api.groq.com (DNS lookup failed: ${e.code}). This is a network problem on this PC, not the agent.`);
+    console.error("Check:  Resolve-DnsName api.groq.com   and   Test-NetConnection api.groq.com -Port 443");
+    console.error("Nothing was run or recorded.");
+    process.exit(1);
+  }
 }
 
 // ---- 2. choose tasks

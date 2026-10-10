@@ -73,7 +73,17 @@ const PRIVILEGED_PROGRAMS: &[&str] = &[
     // nested shells / launchers: their inner code is opaque (e.g. -EncodedCommand)
     // and `start` launches processes that escape the timeout + kill-tree
     "cmd", "powershell", "pwsh", "wsl", "bash", "sh", "wscript", "cscript",
-    "mshta", "rundll32", "regsvr32", "start", "explorer",
+    "mshta", "rundll32", "regsvr32", "start", "explorer", "call",
+];
+
+/// Running a file with one of these extensions DIRECTLY (`update.bat`,
+/// `.\setup.exe`, `call x.cmd`) executes whatever is inside it, which the
+/// classifier can't see — so it needs confirmation. (Found while adding
+/// open_in_default_app: `update.bat` used to be MUTATING because the
+/// extension was stripped and "update" looked like an unknown program.)
+const EXECUTABLE_EXTENSIONS: &[&str] = &[
+    "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta",
+    "exe", "com", "scr", "msi", "msp", "lnk", "cpl", "reg", "pif", "jar",
 ];
 
 /// git subcommands that talk to the network or can push data out.
@@ -225,6 +235,30 @@ fn is_privileged(command: &str) -> bool {
     for (i, w) in ws.iter().enumerate() {
         if program_name(w) == "git"
             && ws[i + 1..].iter().take(4).any(|s| GIT_NETWORK_SUBCOMMANDS.contains(&s.as_str()))
+        {
+            return true;
+        }
+    }
+        // Directly running a script/executable file (first word of any segment).
+    // Known tools (git.exe, node.exe, ...) are exempt so `git.exe status` still works.
+    for seg in segments(&norm) {
+        // the program as cmd sees it: a quoted first token may contain spaces
+        let t = seg.trim_start().trim_start_matches('@');
+        let first = if let Some(rest) = t.strip_prefix('"') {
+            rest.split('"').next().unwrap_or("").to_string()
+        } else {
+            t.split_whitespace().next().unwrap_or("").replace('"', "")
+        };
+        let first = first.as_str();
+        if first.is_empty() {
+            continue;
+        }
+        let base = first.rsplit(|c| c == '\\' || c == '/').next().unwrap_or(first);
+        let ext = base.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+        let prog = program_name(first);
+        if EXECUTABLE_EXTENSIONS.contains(&ext)
+            && !SAFE_PROGRAMS.contains(&prog)
+            && !VERSION_PROGRAMS.contains(&prog)
         {
             return true;
         }
@@ -382,6 +416,27 @@ mod tests {
         );
     }
 
+          #[test]
+      fn running_scripts_and_executables_is_privileged() {
+          check(
+              &[
+                  "update.bat",
+                  ".\\update.bat",
+                  "\"my script.cmd\" --fast",
+                  "setup.exe /S",
+                  "dir & update.bat",
+                  "call update.bat",
+                  "tools\\run.ps1",
+                  "installer.msi",
+                  "lsass_dump.exe",               // old bug: matched the "ls" prefix (was Safe)
+              ],
+              Privileged,
+          );
+          // known tools with an explicit .exe are still judged normally
+          check(&["git.exe status", "node.exe -v"], Safe);
+          check(&["python build.py", "node app.js"], Mutating);
+      }
+
     #[test]
     fn clock_commands() {
         check(
@@ -431,7 +486,6 @@ mod tests {
                 "move a.txt sub\\a.txt",
                 "echo hello > notes.txt",       // redirect inside the workspace
                 "type a.txt | sort",            // piping = not a single command
-                "lsass_dump.exe",               // old bug: matched the "ls" prefix
                 "git commit -m wip",            // writes, so not safe
                 "git diff --output=patch.txt",  // git diff can write a file
                 "git -c core.pager=less status",// subcommand must follow git directly

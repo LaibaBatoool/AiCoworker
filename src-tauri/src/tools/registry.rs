@@ -180,6 +180,18 @@ pub fn all_tool_schemas() -> Vec<ToolSchema> {
                 "required": ["relative_path"]
             }),
         ),
+                tool(
+            "open_in_default_app",
+            "Open a file or folder from the workspace in the user's default application (e.g. a PDF in the PDF viewer, a folder in Explorer). Only documents, images, audio/video and folders can be opened; scripts, executables, shortcuts, macro-enabled Office files and HTML are always refused. Requires user confirmation.",
+            "privileged",
+            json!({
+                "type": "object",
+                "properties": {
+                    "relative_path": { "type": "string", "description": "File or folder inside the workspace." }
+                },
+                "required": ["relative_path"]
+            }),
+        ),
         tool(
             "merge_pdfs",
             "Merge two or more PDF files from the workspace into ONE new PDF, keeping the exact order given. The output file must not already exist. Encrypted PDFs are refused. Bookmarks and form fields are not carried over.",

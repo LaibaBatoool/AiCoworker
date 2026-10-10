@@ -27,6 +27,7 @@ use tools::office_docs::{create_docx, create_xlsx};
 use tools::archive::{create_archive, extract_archive, CreateArchiveResult, ExtractResult};
 use tools::read_spreadsheet::{read_spreadsheet, SpreadsheetData};
 use tools::pdf_pages::{extract_pdf_pages, merge_pdfs, PdfPagesResult};
+use tools::open_file::{check_openable, open_in_default_app, OpenResult};
 use tools::command_classifier::classify_command_risk;
 use tools::snapshot::{take_snapshot, list_snapshots, restore_snapshot, SnapshotRecord};
 use tools::registry::{all_tool_schemas, ToolSchema};
@@ -236,6 +237,27 @@ fn extract_pdf_pages_tool(
 
     let result = extract_pdf_pages(&ws, &relative_path, &pages, &output_relative_path);
     log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    result
+}
+
+#[tauri::command]
+fn open_in_default_app_tool(
+    workspace_root: String,
+    relative_path: String,
+    confirmed: bool,
+) -> Result<OpenResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("open_in_default_app: {}", relative_path);
+    // Refuse unsafe files BEFORE asking for confirmation, so a dangerous
+    // file never produces a dialog the user might click through.
+    if let Err(e) = check_openable(&ws, &relative_path) {
+        log_action(&ws, &PermissionTier::Privileged, &action, false, &e);
+        return Err(e);
+    }
+    checkpoint(&PermissionTier::Privileged, &action, confirmed)?;
+
+    let result = open_in_default_app(&ws, &relative_path);
+    log_action(&ws, &PermissionTier::Privileged, &action, result.is_ok(), &format!("{:?}", result));
     result
 }
 
@@ -530,6 +552,7 @@ pub fn run() {
             create_archive_tool,
             merge_pdfs_tool,
             extract_pdf_pages_tool,
+            open_in_default_app_tool,
             git_commit_tool,
             get_audit_log_tool,
             list_snapshots_tool,

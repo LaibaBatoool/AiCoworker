@@ -116,6 +116,7 @@ pub fn dispatch_tool_call(
             confirmed,
         )
         .and_then(to_value),
+        "open_in_default_app" => crate::open_in_default_app_tool(ws, get_str(args, "relative_path")?, confirmed).and_then(to_value),
         "fetch_url" => crate::fetch_url_tool(ws, get_str(args, "url")?, confirmed).and_then(to_value),
         "list_snapshots" => crate::list_snapshots_tool(ws).and_then(to_value),
         "write_file" => crate::write_file_tool(ws, get_str(args, "relative_path")?, get_str(args, "content")?, confirmed).and_then(to_value),
