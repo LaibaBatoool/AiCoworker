@@ -163,15 +163,21 @@ async fn main() {
     let allow = args[4] == "allow";
     let prompt = args[5..].join(" ");
 
-    let api_key = match std::env::var("GROQ_API_KEY") {
-        Ok(k) if !k.trim().is_empty() => k,
-        _ => {
-            println!("BENCH_RESULT:{}", json!({ "status": "error", "reason": "GROQ_API_KEY not found in src-tauri/.env", "seconds": 0.0 }));
-            return;
-        }
+    // "ollama:<model>" = local model through Ollama (no key, no quota);
+    // anything else = Groq with GROQ_API_KEY from src-tauri/.env.
+    let client = if let Some(local_model) = model.strip_prefix("ollama:") {
+        OpenAiCompatibleClient::local_ollama(local_model)
+    } else {
+        let api_key = match std::env::var("GROQ_API_KEY") {
+            Ok(k) if !k.trim().is_empty() => k,
+            _ => {
+                println!("BENCH_RESULT:{}", json!({ "status": "error", "reason": "GROQ_API_KEY not found in src-tauri/.env", "seconds": 0.0 }));
+                return;
+            }
+        };
+        OpenAiCompatibleClient::groq(api_key, model.clone())
     };
 
-    let client = OpenAiCompatibleClient::groq(api_key, model);
     let started = Instant::now();
     let outcome = tokio::time::timeout(
         Duration::from_secs(timeout_secs),
@@ -205,5 +211,6 @@ async fn main() {
     v["total_tokens"] = json!(usage.total_tokens);
     v["api_calls"] = json!(usage.api_calls);
     v["api_retries"] = json!(usage.api_retries);
+    aicoworker_lib::agent::mcp::shutdown_all();
     println!("BENCH_RESULT:{}", v);
 }

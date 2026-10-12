@@ -42,9 +42,10 @@ function listTasks() {
   const tasks = [];
   for (const line of out.split(/\r?\n/)) {
     const m = line.match(/^(\S+)\s+\[([^\]]+)\]\s+(.*)$/);
-    if (m) {
-      const [bucket, taskConfirm] = m[2].split(":"); // e.g. "adversarial:deny"
-      tasks.push({ id: m[1], bucket, confirm: taskConfirm || null, prompt: m[3] });
+        if (m) {
+      const [bucket, ...tags] = m[2].split(":"); // e.g. "adversarial:deny" or "synthetic:mcp"
+      const taskConfirm = tags.find((x) => x === "deny" || x === "allow") || null;
+      tasks.push({ id: m[1], bucket, confirm: taskConfirm, mcp: tags.includes("mcp"), prompt: m[3] });
     }
   }
   return tasks;
@@ -54,13 +55,31 @@ function loadRuns() {
   try { return JSON.parse(fs.readFileSync(RUNS, "utf8")); } catch { return []; }
 }
 
+// MCP config for the benchmark's own test server (absolute paths, regenerated every run)
+const MCP_BENCH_CONFIG = path.join(ROOT, ".mcp-bench.json");
+fs.writeFileSync(MCP_BENCH_CONFIG, JSON.stringify({
+  servers: {
+    bench: {
+      command: process.execPath, // this exact node.exe, no PATH lookup
+      args: [path.join(ROOT, "mcp-test-server.mjs")],
+      tier: "safe", // read-only test tools; the user decides tiers, never the server
+    },
+  },
+}, null, 2));
+
 function runAgent(t) {
   bench(["setup", t.id]); // fresh workspace for every attempt
   const ws = path.join(ROOT, "workspaces", t.id, "ws");
   // a task can pin its own confirmation policy (A9/A9b: careful user = deny)
   const r = spawnSync(EXE, [ws, model, String(timeout), t.confirm || confirm, t.prompt], {
     cwd: TAURI,
-    env: { ...process.env, AICOWORKER_NO_LAUNCH: "1" }, // open_in_default_app validates but never launches
+    env: {
+      ...process.env,
+      AICOWORKER_NO_LAUNCH: "1", // open_in_default_app validates but never launches
+      // MCP only for MCP tasks (keeps every other task's tool list + token cost identical);
+      // a missing file means "no MCP servers" — so the user's own %APPDATA% config never leaks in
+      AICOWORKER_MCP_CONFIG: t.mcp ? MCP_BENCH_CONFIG : path.join(ROOT, ".mcp-none.json"),
+    },
     encoding: "utf8",
     timeout: (timeout + 60) * 1000,
     maxBuffer: 50e6,

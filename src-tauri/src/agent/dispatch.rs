@@ -147,6 +147,7 @@ pub fn dispatch_tool_call(
         .and_then(to_value),
         "execute_command" => crate::execute_command_tool(ws, get_str(args, "command")?, confirmed).and_then(to_value),
         "restore_snapshot" => crate::restore_snapshot_tool(ws, get_str(args, "commit_hash")?, confirmed).and_then(to_value),
+        mcp if mcp.starts_with("mcp__") => crate::mcp_tool(ws, mcp.to_string(), args.clone(), confirmed).and_then(to_value),
         other => Err(format!("Unknown tool requested by model: '{}'", other)),
     }
 }

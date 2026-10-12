@@ -261,6 +261,34 @@ fn open_in_default_app_tool(
     result
 }
 
+/// Every MCP tool call goes through here: the USER's configured tier is
+/// enforced by checkpoint(), non-safe calls get a snapshot, and every call
+/// (safe ones too — it's external code) is written to the audit log.
+fn mcp_tool(
+    workspace_root: String,
+    name: String,
+    arguments: serde_json::Value,
+    confirmed: bool,
+) -> Result<String, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let tier = match agent::mcp::tier_of(&workspace_root, &name) {
+        "safe" => PermissionTier::Safe,
+        "mutating" => PermissionTier::Mutating,
+        _ => PermissionTier::Privileged,
+    };
+    let args_text: String = arguments.to_string().chars().take(300).collect();
+    let action = format!("{} {}", name, args_text);
+    checkpoint(&tier, &action, confirmed)?;
+    if tier != PermissionTier::Safe {
+        snapshot_before(&ws, &action);
+    }
+
+    let result = agent::mcp::call(&workspace_root, &name, &arguments);
+    let detail: String = format!("{:?}", result).chars().take(500).collect();
+    log_action(&ws, &tier, &action, result.is_ok(), &detail);
+    result
+}
+
 #[tauri::command]
 fn get_audit_log_tool(workspace_root: String) -> Result<Vec<AuditLogRecord>, String> {
     let ws = Workspace::new(&workspace_root)?;

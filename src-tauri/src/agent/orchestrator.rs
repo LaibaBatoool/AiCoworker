@@ -60,8 +60,9 @@ pub async fn run_agent_loop(
     mut messages: Vec<ChatMessage>,
     resume_confirmed: bool,
 ) -> LoopOutcome {
-    let tools = all_tool_schemas();
-    let mut recent_calls: VecDeque<(String, String)> = VecDeque::new();
+    // built-in tools + tools from the user's MCP servers (none if there's no mcp.json)
+    let mut tools = all_tool_schemas();
+    tools.extend(crate::agent::mcp::tool_schemas(workspace_root));    let mut recent_calls: VecDeque<(String, String)> = VecDeque::new();
     let mut tool_failure_counts: HashMap<String, usize> = HashMap::new();
 
     if resume_confirmed {

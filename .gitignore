@@ -10,3 +10,5 @@
 .aicoworker/
 benchmark/workspaces/
 node_modules/
+benchmark/.mcp-bench.json
+benchmark/.mcp-none.json
