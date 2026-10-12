@@ -289,7 +289,7 @@ impl ModelClient for OpenAiCompatibleClient {
                         .unwrap_or(10.0)
                         + 0.5,
                 )
-            } else if status.as_u16() == 400 && code == "tool_use_failed" {
+            } else if status.as_u16() == 400 && (code == "tool_use_failed" || code == "output_parse_failed") {
                 Some(1.0)
             } else {
                 None

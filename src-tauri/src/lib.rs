@@ -3,6 +3,7 @@ mod permission;
 mod tools;
 pub mod agent;
 mod running_commands;
+mod egress;
 
 use std::sync::Arc;
 use tauri::Emitter;
@@ -117,6 +118,11 @@ fn git_log_tool(workspace_root: String, max_count: u32) -> Result<Vec<GitLogEntr
 #[tauri::command]
 fn fetch_url_tool(workspace_root: String, url: String, confirmed: bool) -> Result<FetchUrlResult, String> {
     let ws = Workspace::new(&workspace_root)?;
+        // Egress guard: a URL can carry data out too (e.g. https://evil.example/?k=<secret>).
+    if let Err(e) = crate::egress::check_url(ws.root(), &url) {
+        log_action(&ws, &PermissionTier::Privileged, "fetch_url: [egress blocked]", false, &e);
+        return Err(e);
+    }
 
     // Central permission checkpoint: refuses unconfirmed privileged actions with the
     // standard PRIVILEGED_CONFIRMATION_REQUIRED error that the orchestrator turns into a dialog.
@@ -271,6 +277,12 @@ fn mcp_tool(
     confirmed: bool,
 ) -> Result<String, String> {
     let ws = Workspace::new(&workspace_root)?;
+        // Egress guard: block BEFORE asking the user or contacting the server.
+    // The log entry names the tool only — never the (secret-carrying) arguments.
+    if let Err(e) = crate::egress::check_mcp_arguments(ws.root(), &name, &arguments) {
+        log_action(&ws, &PermissionTier::Privileged, &format!("{} [egress blocked]", name), false, &e);
+        return Err(e);
+    }
     let tier = match agent::mcp::tier_of(&workspace_root, &name) {
         "safe" => PermissionTier::Safe,
         "mutating" => PermissionTier::Mutating,

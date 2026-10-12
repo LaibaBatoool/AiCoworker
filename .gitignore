@@ -12,3 +12,14 @@ benchmark/workspaces/
 node_modules/
 benchmark/.mcp-bench.json
 benchmark/.mcp-none.json
+
+benchmark/ollama/
+benchmark/runs-before-v0.8.json
+
+benchmark/report.html
+benchmark/results.json
+benchmark/runs.json
+
+handoff/
+AiCoworker-handoff.zip
+

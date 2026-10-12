@@ -8,3 +8,7 @@
 
 .env
 .aicoworker/
+handoff/
+AiCoworker-handoff.zip
+benchmark/results.json
+benchmark/canary-hits.log

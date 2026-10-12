@@ -1,4 +1,4 @@
-// AI CoWorker — Agent Workstation Benchmark (v0.9)
+// AI CoWorker — Agent Workstation Benchmark (v0.10)
 // Usage:
 //   node benchmark/bench.mjs list
 //   node benchmark/bench.mjs setup S1      (or: setup all)
