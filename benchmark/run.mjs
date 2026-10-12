@@ -1,4 +1,4 @@
-// AI CoWorker — one-command benchmark runner (v2: API-error aware).
+// AI CoWorker — one-command benchmark runner (v3: API-error aware, per-task confirm policy).
 // Usage (from the repo root):
 //   node benchmark/run.mjs                              run ALL tasks, 3 trials each
 //   node benchmark/run.mjs --tasks S1,S2 --trials 1     pick tasks / trials
@@ -32,17 +32,24 @@ const confirm = arg("confirm", "allow");
 const retries = Number(arg("retries", "2"));
 const retryWait = Number(arg("retry-wait", "45"));
 const only = arg("tasks", "").split(",").map((s) => s.trim()).filter(Boolean);
+// --since 2026-10-12 : count trials already finished (not API errors) since that date
+// for the same model, and only run the missing ones (re-running a batch costs nothing extra)
+const since = arg("since", "");
+const BENCH_VERSION = (fs.readFileSync(BENCH, "utf8").match(/\((v[\d.]+)\)/) || [])[1] || "unknown";
 
 const sleep = (s) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, s * 1000);
 const bench = (args) => spawnSync(process.execPath, [BENCH, ...args], { encoding: "utf8" });
 const isApiFailure = (res) => ["error", "crash", "timeout"].includes(res.status);
+// Groq's DAILY limits (tokens/requests per day) reset in hours: retrying after 45 s is pointless
+const isDailyLimit = (res) => isApiFailure(res) && /per day|\(TPD\)|\(RPD\)/i.test(String(res.reason || ""));
+const retryHint = (res) => ((String(res.reason || "").match(/try again in ([0-9hms.]+)/i) || [])[1] || "").replace(/\.$/, "");
 
 function listTasks() {
   const out = bench(["list"]).stdout || "";
   const tasks = [];
   for (const line of out.split(/\r?\n/)) {
     const m = line.match(/^(\S+)\s+\[([^\]]+)\]\s+(.*)$/);
-        if (m) {
+    if (m) {
       const [bucket, ...tags] = m[2].split(":"); // e.g. "adversarial:deny" or "synthetic:mcp"
       const taskConfirm = tags.find((x) => x === "deny" || x === "allow") || null;
       tasks.push({ id: m[1], bucket, confirm: taskConfirm, mcp: tags.includes("mcp"), prompt: m[3] });
@@ -135,21 +142,30 @@ let tasks = listTasks();
 if (only.length) tasks = tasks.filter((t) => only.includes(t.id));
 if (!tasks.length) { console.error("No matching tasks."); process.exit(1); }
 
-console.log(`\nRunning ${tasks.length} task(s) x ${trials} trial(s) | model ${model} | confirmations: ${confirm}\n`);
+console.log(`\nRunning ${tasks.length} task(s) x ${trials} trial(s) | model ${model} | confirmations: ${confirm} | benchmark ${BENCH_VERSION}${since ? ` | resuming since ${since}` : ""}\n`);
 
 const session = [];
 const all = loadRuns();
+// trials already finished for this task (same model, since --since, real verdicts only)
+const doneBefore = (id) =>
+  since ? all.filter((r) => r.id === id && r.model === model && r.at >= since && r.verify_status !== "API_ERROR").length : 0;
 let apiErrorStreak = 0;
 let aborted = false;
 
 outer:
 for (const t of tasks) {
-  for (let n = 1; n <= trials; n++) {
+  const already = doneBefore(t.id);
+  if (already >= trials) {
+    console.log(`[${t.id}] already has ${already} finished trial(s) since ${since} — skipped`);
+    continue;
+  }
+  for (let n = already + 1; n <= trials; n++) {
     const label = `[${t.id} ${n}/${trials}${t.confirm ? " confirm:" + t.confirm : ""}]`;
-    // run the real agent, retrying when the API itself failed
+
+    // run the real agent, retrying when the API itself failed (but never for a DAILY limit)
     let res = runAgent(t);
     let attempt = 0;
-    while (isApiFailure(res) && attempt < retries) {
+    while (isApiFailure(res) && !isDailyLimit(res) && attempt < retries) {
       attempt++;
       console.log(`${label} API problem: ${String(res.reason || res.status).slice(0, 160)}`);
       console.log(`${label} waiting ${retryWait * attempt}s, then retry ${attempt}/${retries}...`);
@@ -173,6 +189,7 @@ for (const t of tasks) {
 
     const rec = {
       id: t.id, bucket: t.bucket, trial: n, at: new Date().toISOString(), model, confirm: t.confirm || confirm,
+      bench_version: BENCH_VERSION,
       agent_status: res.status, agent_reason: res.reason || "",
       seconds: Number((res.seconds || 0).toFixed(1)),
       model_turns: res.model_turns || 0, tool_calls: res.tool_calls || 0, tool_errors: res.tool_errors || 0,
@@ -185,10 +202,17 @@ for (const t of tasks) {
     all.push(rec);
     fs.writeFileSync(RUNS, JSON.stringify(all, null, 2)); // saved after every trial
 
-    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${rec.total_tokens} tok | ${verifyStatus} ${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
+    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${rec.total_tokens} tok | ${verifyStatus}${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
 
+    if (isDailyLimit(res)) {
+      const hint = retryHint(res);
+      console.log(`\nSTOPPING: Groq's DAILY limit for ${model} is used up${hint ? ` — it frees up again in about ${hint}` : ""}.`);
+      console.log(`Finished trials are saved. Next time add  --since ${since || new Date().toISOString().slice(0, 10)}  to the same command and only the missing trials will run.`);
+      aborted = true;
+      break outer;
+    }
     if (apiErrorStreak >= 3) {
-            const lastReason = String(session[session.length - 1]?.verify_reason || "");
+      const lastReason = String(session[session.length - 1]?.verify_reason || "");
       if (/dns error|connect|timed out|network/i.test(lastReason)) {
         console.log("\nSTOPPING EARLY: 3 API failures in a row, and they look like a NETWORK/DNS problem on this PC (not a rate limit).");
         console.log("Check:  Resolve-DnsName api.groq.com   then run again. Finished trials are already saved.");
@@ -210,7 +234,7 @@ for (const t of tasks) {
   const rs = session.filter((r) => r.id === t.id);
   if (!rs.length) continue;
   const c = (s) => rs.filter((r) => r.verify_status === s).length;
-  const avg = (k) => (rs.reduce((a, r) => a + (r[k] || 0), 0) / rs.length).toFixed(1);
+  const avg = (k) => (rs.reduce((a, r) => a + r[k], 0) / rs.length).toFixed(1);
   console.log(`${t.id.padEnd(4)}  ${String(rs.length).padEnd(6)}  ${String(c("PASS")).padEnd(4)}  ${String(c("FAIL")).padEnd(4)}  ${String(c("INCONCLUSIVE")).padEnd(7)}  ${String(c("API_ERROR")).padEnd(7)}  ${avg("seconds").padEnd(6)}  ${avg("tool_calls").padEnd(9)}  ${Math.round(avg("total_tokens"))}`);
 }
 console.log(aborted ? "\nStopped early (see above). Partial results saved." : "\nDone. Now run: node benchmark/dashboard.mjs");
