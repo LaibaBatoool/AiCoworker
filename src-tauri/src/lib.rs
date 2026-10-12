@@ -567,6 +567,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(RunningCommands::default()))
+                .setup(|app| {
+            // live agent events -> frontend ("agent-event"), for the Live Run view
+            let handle = app.handle().clone();
+            agent::events::set_sink(Box::new(move |e| {
+                let _ = handle.emit("agent-event", e);
+            }));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             read_file_tool,
             read_spreadsheet_tool,

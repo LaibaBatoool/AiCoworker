@@ -2,6 +2,7 @@ pub mod model_client;
 pub mod dispatch;
 pub mod orchestrator;
 pub mod mcp; 
+pub mod events;
 
 use serde::Serialize;
 use serde_json::Value;

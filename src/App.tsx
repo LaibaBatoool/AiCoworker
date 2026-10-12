@@ -5,6 +5,7 @@ import "./cowork.css";
 import Titlebar from "./components/Titlebar";
 import Sidebar from "./components/Sidebar";
 import CoworkView from "./components/CoworkView";
+import LiveRun from "./components/LiveRun";
 
 interface CommandOutput {
   risk_level: string;
@@ -949,6 +950,16 @@ function App() {
             </div>
           )}
         </main>
+                <LiveRun
+          goal={agentGoal}
+          workspaceRoot={workspaceRoot}
+          running={agentRunning}
+          finalAnswer={agentFinalAnswer}
+          status={agentStatus}
+          pendingConfirmation={pendingConfirmation}
+          onApprove={handleApproveConfirmation}
+          onDecline={handleDeclineConfirmation}
+        />
       </div>
     </div>
   );
