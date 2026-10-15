@@ -313,6 +313,14 @@ fn list_snapshots_tool(workspace_root: String) -> Result<Vec<SnapshotRecord>, St
     list_snapshots(&ws)
 }
 
+/// MCP "Connections" panel: config location, running servers, every MCP tool
+/// with its enforced tier, and servers that failed. reload=true re-reads mcp.json.
+#[tauri::command]
+fn mcp_status_tool(workspace_root: String, reload: bool) -> Result<agent::mcp::McpStatus, String> {
+    Workspace::new(&workspace_root)?; // same validation as every other command
+    Ok(agent::mcp::status(&workspace_root, reload))
+}
+
 #[tauri::command]
 fn list_tool_schemas_tool() -> Vec<ToolSchema> {
     all_tool_schemas()
@@ -610,6 +618,7 @@ pub fn run() {
             list_snapshots_tool,
             restore_snapshot_tool,
             list_tool_schemas_tool,
+            mcp_status_tool,
             run_agent_tool
         ])
         .run(tauri::generate_context!())

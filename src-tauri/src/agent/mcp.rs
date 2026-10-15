@@ -536,6 +536,63 @@ pub fn shutdown_all() {
     *manager() = None;
 }
 
+/// One exposed MCP tool, for the "Connections" panel in the UI.
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct McpToolInfo {
+    pub qualified: String,
+    pub server: String,
+    pub tool: String,
+    pub tier: String,
+    pub description: String,
+}
+
+/// What the UI shows: where the config is, which servers are running,
+/// every tool the model will see (with the tier the backend enforces),
+/// and any server that failed to start.
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct McpStatus {
+    pub config_path: Option<String>,
+    pub config_exists: bool,
+    pub running_servers: Vec<String>,
+    pub tools: Vec<McpToolInfo>,
+    pub problems: Vec<String>,
+}
+
+/// `reload = true` stops every server and re-reads mcp.json, so edits to the
+/// config take effect without restarting the app.
+pub fn status(workspace_root: &str, reload: bool) -> McpStatus {
+    let mut slot = manager();
+    if reload {
+        *slot = None; // Drop kills the old server processes
+    }
+    ensure_started(&mut slot, workspace_root);
+    let path = config_path();
+    let mut st = McpStatus {
+        config_exists: path.as_ref().map(|p| p.exists()).unwrap_or(false),
+        config_path: path.map(|p| p.to_string_lossy().to_string()),
+        running_servers: Vec::new(),
+        tools: Vec::new(),
+        problems: Vec::new(),
+    };
+    if let Some(m) = slot.as_ref() {
+        st.running_servers = m.conns.keys().cloned().collect();
+        st.running_servers.sort();
+        st.problems = m.problems.clone();
+        st.tools = m
+            .tools
+            .iter()
+            .map(|e| McpToolInfo {
+                qualified: e.qualified.clone(),
+                server: e.server.clone(),
+                tool: e.tool.name.clone(),
+                tier: e.tier.to_string(),
+                description: e.tool.description.chars().take(200).collect(),
+            })
+            .collect();
+    }
+    st
+}
+
 // ---------------------------------------------------------------
 // Naming / tiers / descriptions (pure functions, unit-tested)
 // ---------------------------------------------------------------
@@ -637,6 +694,28 @@ function listPage(m) {
             ..Default::default()
         };
         (dir, cfg)
+    }
+
+        #[test]
+    fn status_lists_tools_with_config_tiers_and_reloads() {
+        let (dir, _) = fake_config("status");
+        let script = dir.join("fake_server.js").to_string_lossy().replace('\\', "/");
+        let cfg_path = dir.join("mcp.json");
+        std::fs::write(&cfg_path, format!(
+            r#"{{ "mcpServers": {{ "calc": {{ "command": "node", "args": ["{}"], "tier": "mutating", "tool_tiers": {{ "add": "safe" }}, "allow_tools": ["add", "fail"] }},
+                                 "broken": {{ "command": "definitely-not-a-real-program-xyz" }} }} }}"#, script)).unwrap();
+        std::env::set_var("AICOWORKER_MCP_CONFIG", &cfg_path);
+        let st = status(dir.to_str().unwrap(), true);
+        std::env::remove_var("AICOWORKER_MCP_CONFIG");
+
+        assert!(st.config_exists);
+        assert_eq!(st.running_servers, vec!["calc"]);
+        let tiers: Vec<(String, String)> = st.tools.iter().map(|t| (t.qualified.clone(), t.tier.clone())).collect();
+        assert_eq!(tiers, vec![("mcp__calc__add".to_string(), "safe".to_string()), ("mcp__calc__fail".to_string(), "mutating".to_string())],
+            "allow_tools filters, tool_tiers overrides the server tier");
+        assert_eq!(st.problems.len(), 1, "the broken server is reported, not fatal: {:?}", st.problems);
+        shutdown_all();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

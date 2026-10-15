@@ -1,0 +1,24 @@
+.mcp-panel { margin: 16px 0; padding: 14px 16px; border: 1px solid #2c2650; border-radius: 12px; background: #15122a; color: #e8e6f5; }
+.mcp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.mcp-title { font-weight: 600; font-size: 15px; }
+.mcp-sub, .mcp-muted { color: #8f89b3; font-size: 12.5px; }
+.mcp-actions { display: flex; gap: 8px; }
+.mcp-actions button { background: rgba(139, 92, 246, 0.16); color: #ddd6fe; border: 1px solid rgba(139, 92, 246, 0.55); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.mcp-actions button:disabled { opacity: 0.6; cursor: default; }
+.mcp-path { margin: 12px 0 6px; font-size: 12.5px; color: #c9c5e3; word-break: break-all; }
+.mcp-path code { background: #1c1836; padding: 1px 6px; border-radius: 4px; }
+.mcp-ok { color: #86efac; }
+.mcp-warn { color: #fcd34d; }
+.mcp-problem { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; font-size: 12.5px; white-space: pre-wrap; }
+.mcp-server { margin-top: 12px; border-top: 1px dashed #2c2650; padding-top: 10px; }
+.mcp-server-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.mcp-dot { width: 9px; height: 9px; border-radius: 50%; background: #4b4570; }
+.mcp-dot.on { background: #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.7); }
+.mcp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.mcp-table td { padding: 5px 8px; border-bottom: 1px solid #221d40; vertical-align: top; }
+.mcp-tool { font-family: "Cascadia Code", Consolas, monospace; white-space: nowrap; }
+.mcp-desc { color: #a9a3cc; }
+.mcp-tier { padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid; white-space: nowrap; }
+.mcp-tier-safe { color: #86efac; border-color: rgba(34, 197, 94, 0.35); }
+.mcp-tier-mutating { color: #93c5fd; border-color: rgba(59, 130, 246, 0.4); }
+.mcp-tier-privileged { color: #fcd34d; border-color: rgba(245, 158, 11, 0.45); }

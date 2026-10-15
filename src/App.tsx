@@ -6,6 +6,7 @@ import Titlebar from "./components/Titlebar";
 import Sidebar from "./components/Sidebar";
 import CoworkView from "./components/CoworkView";
 import LiveRun from "./components/LiveRun";
+import McpPanel from "./components/McpPanel";
 
 interface CommandOutput {
   risk_level: string;
@@ -605,6 +606,7 @@ function App() {
           ) : (
             <div className="debug-view">
               <h2>AI CoWorker — Debug Tools</h2>
+              <McpPanel workspaceRoot={workspaceRoot} />
               <input
                 placeholder="Workspace root folder (e.g. D:\test-workspace)"
                 value={workspaceRoot}
