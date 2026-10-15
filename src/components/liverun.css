@@ -242,3 +242,9 @@
   .lr-overlay *, .lr-overlay *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
   .lr-row, .lr-block { opacity: 1; }
 }
+
+/* undo / redo the whole run */
+.lr-undo { align-self: stretch; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; padding-top: 12px;
+  border-top: 1px dashed var(--lr-line); font-size: 13px; }
+.lr-btn-undo { background: rgba(139, 92, 246, 0.16); color: #ddd6fe; border: 1px solid rgba(139, 92, 246, 0.55); }
+.lr-undo-msg { flex-basis: 100%; color: var(--lr-muted); font-size: 12.5px; }

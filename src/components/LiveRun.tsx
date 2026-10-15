@@ -36,6 +36,7 @@ interface DirEntry {
   size_bytes?: number;
   modified_unix_timestamp?: number;
 }
+interface SnapshotRecord { commit_hash: string; timestamp_unix: number; message: string }
 interface FileInfo { isDir: boolean; size?: number; mtime?: number }
 type FileMark = "new" | "edited" | "deleted" | undefined;
 
@@ -427,6 +428,8 @@ export default function LiveRun(props: Props) {
   const [now, setNow] = useState(Date.now());
   const [baseline, setBaseline] = useState<Map<string, FileInfo>>(new Map());
   const [current, setCurrent] = useState<Map<string, FileInfo>>(new Map());
+  const [undo, setUndo] = useState<"idle" | "confirm" | "working" | "undone" | "error">("idle");
+  const [undoMsg, setUndoMsg] = useState("");
   const scanSeq = useRef(0);
   const wasRunning = useRef(false);
   const timelineEnd = useRef<HTMLDivElement>(null);
@@ -442,9 +445,45 @@ export default function LiveRun(props: Props) {
     setCurrent(m);
   };
 
+  // ---- Undo / Redo the whole run, using the shadow-git snapshots ----
+  // Every mutating/privileged action snapshots the workspace BEFORE it runs, so the
+  // oldest snapshot taken during this run = the workspace exactly as it was before the run.
+  async function undoRun() {
+    setUndo("working");
+    try {
+      const snaps = await invoke<SnapshotRecord[]>("list_snapshots_tool", { workspaceRoot }); // newest first
+      const since = Math.floor((startedAt ?? Date.now()) / 1000);
+      const inRun = snaps.filter((x) => x.timestamp_unix >= since && !/^(before )?restore_snapshot/.test(x.message));
+      const first = inRun[inRun.length - 1];
+      if (!first) { setUndo("error"); setUndoMsg("This run didn't change any files, so there's nothing to undo."); return; }
+      await invoke("restore_snapshot_tool", { workspaceRoot, commitHash: first.commit_hash, confirmed: true });
+      const m = await scanWorkspace(workspaceRoot);
+      setBaseline(m); setCurrent(m);
+      setUndo("undone");
+      setUndoMsg("The workspace is back to exactly how it was before this run. Files the run created are gone and anything it deleted is back.");
+    } catch (err) {
+      setUndo("error"); setUndoMsg(`Undo failed: ${err}`);
+    }
+  }
+
+  async function redoRun() {
+    setUndo("working");
+    try {
+      const snaps = await invoke<SnapshotRecord[]>("list_snapshots_tool", { workspaceRoot });
+      const r = snaps.find((x) => x.message.startsWith("before restore_snapshot"));
+      if (!r) { setUndo("error"); setUndoMsg("Couldn't find the state to redo."); return; }
+      await invoke("restore_snapshot_tool", { workspaceRoot, commitHash: r.commit_hash, confirmed: true });
+      await refreshTree();
+      setUndo("idle"); setUndoMsg("Redone: the run's changes are back.");
+    } catch (err) {
+      setUndo("error"); setUndoMsg(`Redo failed: ${err}`);
+    }
+  }
+
   // a new run starts: reset everything (layout effect = before any event can land)
   useLayoutEffect(() => {
     if (running && !wasRunning.current) {
+      setUndo("idle"); setUndoMsg("");
       setCards([]); setSteps(0); setStopReason(null); setFocusId(null); setFollow(true);
       setPhase("thinking"); setStartedAt(Date.now()); setEndedAt(null); setOpen(true);
       refreshTree(true);
@@ -541,6 +580,27 @@ export default function LiveRun(props: Props) {
   const activePaths = new Set(cards.filter((c) => c.status === "running" || c.status === "waiting").flatMap((c) => pathsOf(c.name, c.args)));
   const elapsed = startedAt ? ((endedAt ?? now) - startedAt) / 1000 : 0;
 
+  const changedSomething = cards.some((c) => c.status === "ok" && c.tier !== "safe");
+  const undoBar = !running && changedSomething ? (
+    <div className="lr-undo">
+      {undo === "idle" && (
+        <button className="lr-btn lr-btn-undo" onClick={() => setUndo("confirm")}>↶ Undo this run</button>
+      )}
+      {undo === "confirm" && (
+        <>
+          <span>Put the workspace back to how it was before this run?</span>
+          <button className="lr-btn lr-btn-ok" onClick={undoRun}>Yes, undo</button>
+          <button className="lr-btn lr-btn-no" onClick={() => setUndo("idle")}>Cancel</button>
+        </>
+      )}
+      {undo === "working" && <span className="lr-muted"><span className="lr-spinner" /> restoring snapshot…</span>}
+      {undo === "undone" && (
+        <button className="lr-btn lr-btn-undo" onClick={redoRun}>↷ Redo</button>
+      )}
+      {undoMsg && <div className="lr-undo-msg">{undoMsg}</div>}
+    </div>
+  ) : null;
+
   const phaseText: Record<Phase, string> = {
     idle: "Ready",
     thinking: `Thinking · step ${steps || 1}`,
@@ -631,12 +691,14 @@ export default function LiveRun(props: Props) {
                       {changedFiles.map(([p, m]) => <span key={p} className={`lr-chip lr-badge-${m}`}>{m} · {p}</span>)}
                     </div>
                   )}
+                  {undoBar}
                 </div>
               ) : phase === "stopped" && follow && !running ? (
                 <div className="lr-done lr-stopped">
                   <div className="lr-done-check">!</div>
                   <div className="lr-done-title">Run stopped</div>
                   <pre className="lr-answer">{friendlyReason(stopReason ?? status)}</pre>
+                  {undoBar}
                 </div>
               ) : activeCard ? (
                 <>

@@ -466,7 +466,11 @@ fn restore_snapshot_tool(
 ) -> Result<(), String> {
     let ws = Workspace::new(&workspace_root)?;
     let action = format!("restore_snapshot: {}", commit_hash);
-    checkpoint(&PermissionTier::Privileged, &action, confirmed)?;
+        checkpoint(&PermissionTier::Privileged, &action, confirmed)?;
+    // Save the CURRENT state first. Without this, any change made after the
+    // last snapshot (e.g. the agent's final write) is wiped by the restore and
+    // can never be brought back — so a restore itself would not be undoable.
+    snapshot_before(&ws, &format!("before {}", action));
 
     let result = restore_snapshot(&ws, &commit_hash);
     log_action(&ws, &PermissionTier::Privileged, &action, result.is_ok(), &format!("{:?}", result));
@@ -610,4 +614,36 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::*;
+
+    #[test]
+    fn restore_is_itself_undoable() {
+        let dir = std::env::temp_dir().join(format!("aicw_undo_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().to_string();
+
+        // a "run": two writes. Each write snapshots BEFORE it runs, so "v2" is in no snapshot.
+        write_file_tool(root.clone(), "a.txt".into(), "v1".into(), true).unwrap();
+        write_file_tool(root.clone(), "a.txt".into(), "v2".into(), true).unwrap();
+        let ws = Workspace::new(&root).unwrap();
+        let snaps = list_snapshots(&ws).unwrap(); // newest first
+        let before_run = snaps.last().unwrap().commit_hash.clone();
+
+        // undo the run
+        restore_snapshot_tool(root.clone(), before_run, true).unwrap();
+        assert!(!dir.join("a.txt").exists(), "undo removes the file the run created");
+
+        // redo: the state just before the restore must still exist
+        let redo = list_snapshots(&ws).unwrap().into_iter()
+            .find(|s| s.message.starts_with("before restore_snapshot"))
+            .expect("restore must snapshot the current state first");
+        restore_snapshot_tool(root.clone(), redo.commit_hash, true).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v2", "the run's final write is recoverable");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
