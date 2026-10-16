@@ -612,6 +612,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(RunningCommands::default()))
                 .setup(|app| {
+            // desktop app: send only the tools a goal needs (benchmark keeps all tools)
+            agent::routing::set_enabled(true);
             // live agent events -> frontend ("agent-event"), for the Live Run view
             let handle = app.handle().clone();
             agent::events::set_sink(Box::new(move |e| {

@@ -84,8 +84,8 @@ async fn run_agent_loop_inner(
     resume_confirmed: bool,
 ) -> LoopOutcome {
     // built-in tools + tools from the user's MCP servers (none if there's no mcp.json)
-    let mut tools = all_tool_schemas();
-    tools.extend(crate::agent::mcp::tool_schemas(workspace_root));
+    let mut all_tools = all_tool_schemas();
+    all_tools.extend(crate::agent::mcp::tool_schemas(workspace_root));
     let mut recent_calls: VecDeque<(String, String)> = VecDeque::new();
     let mut tool_failure_counts: HashMap<String, usize> = HashMap::new();
 
@@ -106,6 +106,7 @@ async fn run_agent_loop_inner(
 
             messages = match process_pending_tool_calls(
                 workspace_root,
+                &all_tools,
                 messages,
                 &pending,
                 &mut recent_calls,
@@ -122,6 +123,8 @@ async fn run_agent_loop_inner(
         events::emit(AgentEvent::Thinking { step: step + 1 });
         let trimmed_for_model = trim_history_for_request(&messages);
 
+        // only the tools this goal needs (all of them when routing is off)
+        let tools = crate::agent::routing::select(&all_tools, &messages);
         let turn = match client.next_turn(&trimmed_for_model, &tools).await {
             Ok(t) => t,
             Err(e) => return LoopOutcome::Error(format!("Model call failed: {}", e)),
@@ -147,6 +150,7 @@ async fn run_agent_loop_inner(
 
                 messages = match process_pending_tool_calls(
                     workspace_root,
+                    &all_tools,
                     messages,
                     &tool_calls,
                     &mut recent_calls,
@@ -170,6 +174,9 @@ async fn run_agent_loop_inner(
 /// execute_command is classified per command, MCP tools use the user's config,
 /// everything else uses the registry. Unknown = privileged.
 fn real_tier(workspace_root: &str, name: &str, args: &Value) -> String {
+    if name == crate::agent::routing::REQUEST_TOOLS {
+        return "safe".to_string();
+    }
     if name == "execute_command" {
         let cmd = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
         return crate::tools::command_classifier::classify_command_risk(cmd).as_str().to_string();
@@ -304,6 +311,7 @@ fn tool_result_counts_as_failure(result: &Result<Value, String>) -> bool {
 /// confirmed=false first.
 fn process_pending_tool_calls(
     workspace_root: &str,
+    all_tools: &[crate::tools::registry::ToolSchema],
     mut messages: Vec<ChatMessage>,
     pending: &[ToolCallRequest],
     recent_calls: &mut VecDeque<(String, String)>,
@@ -350,12 +358,11 @@ fn process_pending_tool_calls(
             tier: real_tier(workspace_root, &call.function.name, &args),
         });
         let started = std::time::Instant::now();
-        let result = crate::agent::dispatch::dispatch_tool_call(
-            workspace_root,
-            &call.function.name,
-            &args,
-            confirmed_this_call,
-        );
+        let result = if call.function.name == crate::agent::routing::REQUEST_TOOLS {
+            crate::agent::routing::handle_request(all_tools, &args) // loads a tool group, touches nothing
+        } else {
+            crate::agent::dispatch::dispatch_tool_call(workspace_root, &call.function.name, &args, confirmed_this_call)
+        };
         let needs_confirmation = matches!(&result, Err(e) if e.starts_with("PRIVILEGED_CONFIRMATION_REQUIRED"));
         if !needs_confirmation {
             events::emit(AgentEvent::ToolFinished {
@@ -532,7 +539,8 @@ mod live_event_tests {
         assert_eq!(std::fs::read_to_string(dir.join("hello.txt")).unwrap(), "hi there");
 
         // other tests in this binary may emit too (e.g. model_switched), so keep only this run's kinds
-        let ev: Vec<AgentEvent> = seen.lock().unwrap().iter().filter(|e| !matches!(e, AgentEvent::ModelSwitched { .. })).cloned().collect();        let kinds: Vec<String> = ev.iter().map(|e| serde_json::to_value(e).unwrap()["kind"].as_str().unwrap().to_string()).collect();
+        let ev: Vec<AgentEvent> = seen.lock().unwrap().iter().filter(|e| !matches!(e, AgentEvent::ModelSwitched { .. })).cloned().collect();
+        let kinds: Vec<String> = ev.iter().map(|e| serde_json::to_value(e).unwrap()["kind"].as_str().unwrap().to_string()).collect();
         assert_eq!(kinds, vec!["thinking", "tool_started", "tool_finished", "thinking", "answer"], "{:?}", ev);
         match &ev[1] {
             AgentEvent::ToolStarted { name, tier, arguments, .. } => {
@@ -543,6 +551,56 @@ mod live_event_tests {
             other => panic!("unexpected {:?}", other),
         }
         assert!(matches!(&ev[2], AgentEvent::ToolFinished { ok: true, .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+#[cfg(test)]
+mod routing_loop_tests {
+    use super::*;
+    use crate::agent::model_client::{ToolCallFunction, ToolCallRequest};
+    use crate::tools::registry::ToolSchema;
+    use std::sync::Mutex;
+
+    /// Turn 1: asks for the office tools. Turn 2: answers. Records the tool names it was offered.
+    struct Asker {
+        offered: Mutex<Vec<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelClient for Asker {
+        async fn next_turn(&self, _m: &[ChatMessage], tools: &[ToolSchema]) -> Result<ModelTurn, String> {
+            let mut o = self.offered.lock().unwrap();
+            o.push(tools.iter().map(|t| t.name.clone()).collect());
+            if o.len() == 1 {
+                Ok(ModelTurn::ToolCalls(vec![ToolCallRequest {
+                    id: "r1".into(),
+                    kind: "function".into(),
+                    function: ToolCallFunction { name: "request_tools".into(), arguments: r#"{"group":"office"}"#.into() },
+                }]))
+            } else {
+                Ok(ModelTurn::FinalAnswer("ok".into()))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn model_can_load_a_group_it_needs() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::routing::set_enabled(true);
+        let dir = std::env::temp_dir().join(format!("aicw_routing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let client = Asker { offered: Mutex::new(Vec::new()) };
+        let msgs = vec![ChatMessage { role: "user".into(), content: Some("write a poem".into()), tool_calls: None, tool_call_id: None }];
+        let out = run_agent_loop(&client, dir.to_str().unwrap(), msgs, false).await;
+        crate::agent::routing::set_enabled(false);
+        let LoopOutcome::Done { messages, .. } = out else { panic!("expected Done") };
+
+        let offered = client.offered.lock().unwrap().clone();
+        assert!(!offered[0].contains(&"create_docx".to_string()) && offered[0].contains(&"request_tools".to_string()));
+        assert!(offered[1].contains(&"create_docx".to_string()), "office tools loaded after the request");
+        let reply = messages.iter().find(|m| m.role == "tool").and_then(|m| m.content.clone()).unwrap();
+        assert!(reply.contains("Loaded the 'office' tools"), "{}", reply);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

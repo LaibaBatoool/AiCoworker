@@ -120,6 +120,7 @@ function describe(name: string, a: any): string {
     case "git_status": return "Checking git status";
     case "git_log": return "Reading git history";
     case "open_in_default_app": return `Opening ${p}`;
+    case "request_tools": return `Loading the ${a?.group ?? ""} tools`;
     default:
       if (name.startsWith("mcp__")) {
         const [, server, tool] = name.split("__");
@@ -135,7 +136,7 @@ function icon(name: string): string {
     write_file: "✍️", edit_file: "🩹", read_file: "📖", create_docx: "📝", create_xlsx: "📊",
     read_spreadsheet: "📊", list_directory: "📂", search_files: "🔎", get_file_metadata: "ℹ️",
     create_directory: "📁", delete_file: "🗑️", move_rename: "↪️", execute_command: "⌨️",
-    fetch_url: "🌐", convert_to_pdf: "📄", git_commit: "🌿", git_diff: "🌿", git_status: "🌿", git_log: "🌿",
+    fetch_url: "🌐", request_tools: "🧰", convert_to_pdf: "📄", git_commit: "🌿", git_diff: "🌿", git_status: "🌿", git_log: "🌿",
   };
   return m[name] ?? "🛠️";
 }
