@@ -405,6 +405,64 @@ function Tree({ nodes, active, depth = 0 }: { nodes: TreeNode[]; active: Set<str
   );
 }
 
+// ---------- recordings (replay) ----------
+type TreeEvent = { kind: "tree"; baseline: boolean; files: [string, boolean, number | null, number | null][] };
+type DecisionEvent = { kind: "decision"; approved: boolean };
+type RecEvent = AgentEvent | TreeEvent | DecisionEvent;
+interface Recording { version: number; goal: string; workspace: string; started_at: number; events: { t: number; e: RecEvent }[] }
+interface RecordingInfo { file: string; goal: string; workspace: string; started_at: number; duration_ms: number; actions: number; outcome: string }
+
+const MAX_REPLAY_GAP_MS = 1800; // long API waits are skipped during replay
+const SPEEDS = [1, 2, 4];
+
+const treeToEvent = (m: Map<string, FileInfo>, baseline: boolean): TreeEvent => ({
+  kind: "tree",
+  baseline,
+  files: [...m.entries()].map(([p, f]) => [p, f.isDir, f.size ?? null, f.mtime ?? null]),
+});
+const eventToTree = (e: TreeEvent) =>
+  new Map<string, FileInfo>(e.files.map(([p, isDir, size, mtime]) => [p, { isDir, size: size ?? undefined, mtime: mtime ?? undefined }]));
+
+function fmtDate(ms: number) {
+  try { return new Date(ms).toLocaleString(); } catch { return String(ms); }
+}
+
+function ReplayList({ onPick, onClose }: { onPick: (file: string) => void; onClose: () => void }) {
+  const [items, setItems] = useState<RecordingInfo[] | null>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    invoke<RecordingInfo[]>("list_recordings_tool").then(setItems).catch((e) => setErr(String(e)));
+  }, []);
+  return (
+    <div className="lr-overlay" onClick={onClose}>
+      <div className="lr-shell lr-list-shell" onClick={(ev) => ev.stopPropagation()}>
+        <header className="lr-header">
+          <div className="lr-head-text">
+            <div className="lr-goal">▶ Replays</div>
+            <div className="lr-phase">Every run is recorded. Replay one like a video — no AI calls, works offline.</div>
+          </div>
+          <button className="lr-close" onClick={onClose}>✕</button>
+        </header>
+        <div className="lr-list">
+          {err && <div className="lr-card-err">{err}</div>}
+          {items === null && !err && <div className="lr-muted">Loading…</div>}
+          {items && items.length === 0 && <div className="lr-muted">No recordings yet. Run the agent once and it will appear here.</div>}
+          {items?.map((r) => (
+            <button key={r.file} className="lr-rec" onClick={() => onPick(r.file)}>
+              <span className={`lr-rec-dot lr-rec-${r.outcome}`} />
+              <span className="lr-rec-main">
+                <span className="lr-rec-goal">{r.goal || "(no goal)"}</span>
+                <span className="lr-muted">{fmtDate(r.started_at)} · {r.actions} action{r.actions === 1 ? "" : "s"} · {(r.duration_ms / 1000).toFixed(1)}s · {r.outcome}</span>
+              </span>
+              <span className="lr-rec-play">▶</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function friendlyReason(r: string): string {
   if (/429|rate.?limit|Too Many Requests/i.test(r))
     return "The AI provider's free-tier rate limit was reached (HTTP 429), so the run paused here.\nEverything done so far is saved (see the steps on the left). Wait a bit, or try again tomorrow if the daily quota is used up.";
@@ -421,6 +479,7 @@ export default function LiveRun(props: Props) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [steps, setSteps] = useState(0);
   const [stopReason, setStopReason] = useState<string | null>(null);
+  const [answerText, setAnswerText] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [follow, setFollow] = useState(true);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -430,17 +489,98 @@ export default function LiveRun(props: Props) {
   const [current, setCurrent] = useState<Map<string, FileInfo>>(new Map());
   const [undo, setUndo] = useState<"idle" | "confirm" | "working" | "undone" | "error">("idle");
   const [undoMsg, setUndoMsg] = useState("");
+  // replay
+  const [mode, setMode] = useState<"live" | "replay">("live");
+  const [showList, setShowList] = useState(false);
+  const [replay, setReplay] = useState<Recording | null>(null);
+  const [replayIdx, setReplayIdx] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [decisions, setDecisions] = useState<Record<string, boolean>>({});
+
   const scanSeq = useRef(0);
   const wasRunning = useRef(false);
   const timelineEnd = useRef<HTMLDivElement>(null);
   const followRef = useRef(follow);
   followRef.current = follow;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const rec = useRef<Recording | null>(null); // the live run being recorded
+  const waitingCard = useRef<string | null>(null);
+
+  const record = (e: RecEvent) => {
+    if (rec.current && modeRef.current === "live") rec.current.events.push({ t: Date.now() - rec.current.started_at, e });
+  };
+
+  function resetView() {
+    setUndo("idle"); setUndoMsg(""); setAnswerText(null); setDecisions({});
+    setCards([]); setSteps(0); setStopReason(null); setFocusId(null); setFollow(true);
+    setBaseline(new Map()); setCurrent(new Map());
+  }
+
+  // One place that turns an event into screen state — used by BOTH the live stream and replay.
+  function apply(e: RecEvent) {
+    switch (e.kind) {
+      case "thinking":
+        setSteps((s) => s + 1);
+        setPhase("thinking");
+        break;
+      case "tool_started":
+        setPhase("acting");
+        setCards((cs) => {
+          const i = cs.findIndex((c) => c.id === e.call_id);
+          const card: Card = { id: e.call_id, name: e.name, args: e.arguments, tier: e.tier, status: "running", preview: "" };
+          if (i >= 0) { const copy = [...cs]; copy[i] = card; return copy; } // resumed after approval
+          return [...cs, card];
+        });
+        setFocusId((f) => (followRef.current ? e.call_id : f));
+        break;
+      case "tool_finished":
+        setCards((cs) => cs.map((c) => (c.id === e.call_id ? { ...c, status: e.ok ? "ok" : "error", preview: e.preview, durationMs: e.duration_ms } : c)));
+        break;
+      case "needs_confirmation":
+        setPhase("waiting");
+        setCards((cs) => {
+          const copy = [...cs];
+          for (let i = copy.length - 1; i >= 0; i--) {
+            if (copy[i].name === e.name && copy[i].status === "running") {
+              copy[i] = { ...copy[i], status: "waiting" };
+              waitingCard.current = copy[i].id;
+              break;
+            }
+          }
+          return copy;
+        });
+        break;
+      case "answer":
+        setPhase("done");
+        setAnswerText(e.text);
+        break;
+      case "stopped":
+        setPhase("stopped");
+        setStopReason(e.reason);
+        break;
+      case "tree": {
+        const m = eventToTree(e);
+        if (e.baseline) setBaseline(m);
+        setCurrent(m);
+        break;
+      }
+      case "decision": {
+        const id = waitingCard.current;
+        if (id) setDecisions((d) => ({ ...d, [id]: e.approved }));
+        if (!e.approved) setCards((cs) => cs.map((c) => (c.status === "waiting" ? { ...c, status: "declined" } : c)));
+        break;
+      }
+    }
+  }
 
   const refreshTree = async (asBaseline = false) => {
-    if (!workspaceRoot) return;
+    if (!workspaceRoot || modeRef.current === "replay") return;
     const seq = ++scanSeq.current;
     const m = await scanWorkspace(workspaceRoot);
     if (seq !== scanSeq.current) return; // a newer scan started
+    record(treeToEvent(m, asBaseline));
     if (asBaseline) setBaseline(m);
     setCurrent(m);
   };
@@ -480,12 +620,18 @@ export default function LiveRun(props: Props) {
     }
   }
 
-  // a new run starts: reset everything (layout effect = before any event can land)
+  // approve / decline also go into the recording
+  const approve = () => { record({ kind: "decision", approved: true }); if (waitingCard.current) setDecisions((d) => ({ ...d, [waitingCard.current!]: true })); onApprove(); };
+  const decline = () => { record({ kind: "decision", approved: false }); onDecline(); };
+
+  // a live run starts / ends (layout effect = before any event can land)
   useLayoutEffect(() => {
     if (running && !wasRunning.current) {
-      setUndo("idle"); setUndoMsg("");
-      setCards([]); setSteps(0); setStopReason(null); setFocusId(null); setFollow(true);
-      setPhase("thinking"); setStartedAt(Date.now()); setEndedAt(null); setOpen(true);
+      setMode("live"); setPlaying(false); setReplay(null); setShowList(false);
+      resetView();
+      const t0 = Date.now();
+      rec.current = { version: 1, goal, workspace: workspaceRoot, started_at: t0, events: [] };
+      setPhase("thinking"); setStartedAt(t0); setEndedAt(null); setOpen(true);
       refreshTree(true);
     }
     if (!running && wasRunning.current) {
@@ -494,6 +640,13 @@ export default function LiveRun(props: Props) {
       setCards((cs) => cs.map((c) => (c.status === "waiting" ? { ...c, status: "declined" } : c.status === "running" ? { ...c, status: "error" } : c)));
       setPhase((p) => (p === "done" ? p : "stopped"));
       refreshTree();
+      // save the recording once the final file scan has landed
+      const r = rec.current;
+      rec.current = r; // keep recording the final tree
+      setTimeout(() => {
+        if (r && r.events.length > 0) invoke("save_recording_tool", { content: JSON.stringify(r) }).catch(() => {});
+        if (rec.current === r) rec.current = null;
+      }, 2500);
     }
     wasRunning.current = running;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -504,50 +657,53 @@ export default function LiveRun(props: Props) {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     listen<AgentEvent>("agent-event", ({ payload: e }) => {
-      switch (e.kind) {
-        case "thinking":
-          setSteps((s) => s + 1);
-          setPhase("thinking");
-          break;
-        case "tool_started":
-          setPhase("acting");
-          setCards((cs) => {
-            const i = cs.findIndex((c) => c.id === e.call_id);
-            const card: Card = { id: e.call_id, name: e.name, args: e.arguments, tier: e.tier, status: "running", preview: "" };
-            if (i >= 0) { const copy = [...cs]; copy[i] = card; return copy; } // resumed after approval
-            return [...cs, card];
-          });
-          setFocusId((f) => (followRef.current ? e.call_id : f));
-          break;
-        case "tool_finished":
-          setCards((cs) => cs.map((c) => (c.id === e.call_id ? { ...c, status: e.ok ? "ok" : "error", preview: e.preview, durationMs: e.duration_ms } : c)));
-          refreshTree();
-          break;
-        case "needs_confirmation":
-          setPhase("waiting");
-          setCards((cs) => {
-            const copy = [...cs];
-            for (let i = copy.length - 1; i >= 0; i--) {
-              if (copy[i].name === e.name && copy[i].status === "running") { copy[i] = { ...copy[i], status: "waiting" }; break; }
-            }
-            return copy;
-          });
-          break;
-        case "answer":
-          setPhase("done");
-          setEndedAt(Date.now());
-          refreshTree();
-          break;
-        case "stopped":
-          setPhase("stopped");
-          setStopReason(e.reason);
-          setEndedAt(Date.now());
-          break;
-      }
+      if (modeRef.current === "replay") return; // a replay owns the screen
+      record(e);
+      apply(e);
+      if (e.kind === "tool_finished" || e.kind === "answer") refreshTree();
+      if (e.kind === "answer" || e.kind === "stopped") setEndedAt(Date.now());
     }).then((u) => { if (cancelled) u(); else unlisten = u; });
     return () => { cancelled = true; unlisten?.(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceRoot]);
+
+  // ---- replay player ----
+  async function startReplay(file: string) {
+    try {
+      const r = JSON.parse(await invoke<string>("load_recording_tool", { file })) as Recording;
+      setShowList(false);
+      setMode("replay");
+      resetView();
+      waitingCard.current = null;
+      setReplay(r); setReplayIdx(0); setPhase("thinking"); setStartedAt(null); setEndedAt(null);
+      setPlaying(true); setOpen(true);
+    } catch (err) {
+      alert(`Couldn't load that recording: ${err}`);
+    }
+  }
+
+  function restartReplay() {
+    if (!replay) return;
+    resetView(); waitingCard.current = null;
+    setReplayIdx(0); setPhase("thinking"); setPlaying(true);
+  }
+
+  function exitReplay() {
+    setPlaying(false); setReplay(null); setMode("live"); resetView(); setPhase("idle"); setOpen(false);
+  }
+
+  useEffect(() => {
+    if (mode !== "replay" || !playing || !replay) return;
+    if (replayIdx >= replay.events.length) { setPlaying(false); return; }
+    const prevT = replayIdx > 0 ? replay.events[replayIdx - 1].t : 0;
+    const gap = Math.min(Math.max(replay.events[replayIdx].t - prevT, 0), MAX_REPLAY_GAP_MS) / speed;
+    const timer = setTimeout(() => {
+      apply(replay.events[replayIdx].e);
+      setReplayIdx((i) => i + 1);
+    }, gap);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, playing, replayIdx, speed, replay]);
 
   // ticking clock while running
   useEffect(() => {
@@ -574,14 +730,22 @@ export default function LiveRun(props: Props) {
     return { marks, ghosts };
   }, [baseline, current]);
 
+  const isReplay = mode === "replay" && replay !== null;
+  const replayDone = isReplay && replayIdx >= replay.events.length;
+  const active = isReplay ? !replayDone : running; // "is the run in progress" for the screen
   const tree = useMemo(() => buildTree(current, marks, ghosts), [current, marks, ghosts]);
   const changedFiles = [...marks.entries()].filter(([p]) => !(current.get(p)?.isDir ?? ghosts.get(p)?.isDir));
   const activeCard = cards.find((c) => c.id === focusId) ?? cards[cards.length - 1];
   const activePaths = new Set(cards.filter((c) => c.status === "running" || c.status === "waiting").flatMap((c) => pathsOf(c.name, c.args)));
-  const elapsed = startedAt ? ((endedAt ?? now) - startedAt) / 1000 : 0;
+  const elapsed = isReplay
+    ? (replayIdx > 0 ? replay.events[replayIdx - 1].t : 0) / 1000
+    : startedAt ? ((endedAt ?? now) - startedAt) / 1000 : 0;
+  const shownGoal = isReplay ? replay.goal : goal;
+  const shownAnswer = answerText ?? finalAnswer ?? "";
+  const progress = isReplay && replay.events.length ? (replayIdx / replay.events.length) * 100 : 0;
 
   const changedSomething = cards.some((c) => c.status === "ok" && c.tier !== "safe");
-  const undoBar = !running && changedSomething ? (
+  const undoBar = !isReplay && !running && changedSomething ? (
     <div className="lr-undo">
       {undo === "idle" && (
         <button className="lr-btn lr-btn-undo" onClick={() => setUndo("confirm")}>↶ Undo this run</button>
@@ -601,21 +765,45 @@ export default function LiveRun(props: Props) {
     </div>
   ) : null;
 
+  // what goes where Approve/Decline would be: real buttons live, the recorded choice in a replay
+  const confirmArea = (c: Card) => {
+    if (isReplay) {
+      const d = decisions[c.id];
+      return d === undefined ? null : <span className={`lr-decision ${d ? "yes" : "no"}`}>{d ? "✓ You approved" : "⊘ You declined"}</span>;
+    }
+    if (c.status === "waiting" && pendingConfirmation)
+      return (
+        <div className="lr-confirm" onClick={(ev) => ev.stopPropagation()}>
+          <button className="lr-btn lr-btn-ok" onClick={approve}>Approve</button>
+          <button className="lr-btn lr-btn-no" onClick={decline}>Decline</button>
+        </div>
+      );
+    if (decisions[c.id] !== undefined) return <span className={`lr-decision ${decisions[c.id] ? "yes" : "no"}`}>{decisions[c.id] ? "✓ You approved" : "⊘ You declined"}</span>;
+    return null;
+  };
+
   const phaseText: Record<Phase, string> = {
     idle: "Ready",
     thinking: `Thinking · step ${steps || 1}`,
     acting: activeCard ? describe(activeCard.name, activeCard.args) : "Working",
-    waiting: "Waiting for your approval",
+    waiting: isReplay ? "Waiting for approval" : "Waiting for your approval",
     done: "Done",
     stopped: "Stopped",
   };
 
+  if (showList) return <ReplayList onPick={startReplay} onClose={() => setShowList(false)} />;
+
   if (!open) {
-    return cards.length > 0 || running ? (
-      <button className={`lr-pill lr-phase-${phase}`} onClick={() => setOpen(true)}>
-        <span className="lr-orb-mini" /> Live view {running ? `· ${phaseText[phase]}` : ""}
-      </button>
-    ) : null;
+    return (
+      <div className="lr-pills">
+        <button className="lr-pill lr-pill-replay" onClick={() => setShowList(true)} title="Replay a recorded run">▶ Replays</button>
+        {(cards.length > 0 || running) && (
+          <button className={`lr-pill lr-phase-${phase}`} onClick={() => setOpen(true)}>
+            <span className="lr-orb-mini" /> Live view {running ? `· ${phaseText[phase]}` : ""}
+          </button>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -625,17 +813,36 @@ export default function LiveRun(props: Props) {
         <header className="lr-header">
           <div className={`lr-orb lr-orb-${phase}`}><span /></div>
           <div className="lr-head-text">
-            <div className="lr-goal" title={goal}>{goal || "Agent run"}</div>
-            <div className="lr-phase">{phaseText[phase]}</div>
+            <div className="lr-goal" title={shownGoal}>
+              {isReplay && <span className="lr-replay-badge">REPLAY</span>}
+              {shownGoal || "Agent run"}
+            </div>
+            <div className="lr-phase">
+              {phaseText[phase]}
+              {isReplay && <span className="lr-muted"> · recorded {fmtDate(replay.started_at)}</span>}
+            </div>
           </div>
+          {isReplay && (
+            <div className="lr-player">
+              {replayDone ? (
+                <button className="lr-btn lr-btn-undo" onClick={restartReplay}>↺ Replay again</button>
+              ) : (
+                <button className="lr-btn lr-btn-undo" onClick={() => setPlaying((p) => !p)}>{playing ? "⏸ Pause" : "▶ Play"}</button>
+              )}
+              {SPEEDS.map((s) => (
+                <button key={s} className={`lr-speed ${speed === s ? "on" : ""}`} onClick={() => setSpeed(s)}>{s}×</button>
+              ))}
+            </div>
+          )}
           <div className="lr-stats">
             <div><b>{elapsed.toFixed(1)}s</b><span>time</span></div>
             <div><b>{steps}</b><span>steps</span></div>
             <div><b>{cards.length}</b><span>actions</span></div>
             <div><b>{changedFiles.length}</b><span>files changed</span></div>
           </div>
-          <button className="lr-close" onClick={() => setOpen(false)} title="Hide live view">✕</button>
+          <button className="lr-close" onClick={isReplay ? exitReplay : () => setOpen(false)} title={isReplay ? "Exit replay" : "Hide live view"}>✕</button>
         </header>
+        {isReplay && <div className="lr-progress"><div style={{ width: `${progress}%` }} /></div>}
 
         <div className="lr-body">
           {/* timeline */}
@@ -660,15 +867,10 @@ export default function LiveRun(props: Props) {
                   {c.durationMs !== undefined && <span className="lr-muted">{fmtMs(c.durationMs)}</span>}
                 </div>
                 {c.status === "error" && c.preview && <div className="lr-card-err">{c.preview.slice(0, 160)}</div>}
-                {c.status === "waiting" && pendingConfirmation && (
-                  <div className="lr-confirm" onClick={(ev) => ev.stopPropagation()}>
-                    <button className="lr-btn lr-btn-ok" onClick={onApprove}>Approve</button>
-                    <button className="lr-btn lr-btn-no" onClick={onDecline}>Decline</button>
-                  </div>
-                )}
+                {confirmArea(c)}
               </div>
             ))}
-            {phase === "thinking" && running && (
+            {phase === "thinking" && active && (
               <div className="lr-card lr-thinking"><span className="lr-shimmer">Thinking about the next step…</span></div>
             )}
             <div ref={timelineEnd} />
@@ -677,7 +879,7 @@ export default function LiveRun(props: Props) {
           {/* stage */}
           <section className="lr-col lr-stage">
             <div className="lr-col-title">
-              Live
+              {isReplay ? "Replay" : "Live"}
               {!follow && <button className="lr-follow" onClick={() => { setFollow(true); setFocusId(null); }}>follow live ⟳</button>}
             </div>
             <div className="lr-stage-inner">
@@ -685,7 +887,7 @@ export default function LiveRun(props: Props) {
                 <div className="lr-done">
                   <div className="lr-done-check">✓</div>
                   <div className="lr-done-title">Finished in {elapsed.toFixed(1)}s</div>
-                  <pre className="lr-answer">{finalAnswer ?? ""}</pre>
+                  <pre className="lr-answer">{shownAnswer}</pre>
                   {changedFiles.length > 0 && (
                     <div className="lr-chips">
                       {changedFiles.map(([p, m]) => <span key={p} className={`lr-chip lr-badge-${m}`}>{m} · {p}</span>)}
@@ -693,7 +895,7 @@ export default function LiveRun(props: Props) {
                   )}
                   {undoBar}
                 </div>
-              ) : phase === "stopped" && follow && !running ? (
+              ) : phase === "stopped" && follow && !active ? (
                 <div className="lr-done lr-stopped">
                   <div className="lr-done-check">!</div>
                   <div className="lr-done-title">Run stopped</div>
@@ -707,14 +909,17 @@ export default function LiveRun(props: Props) {
                     <span className={`lr-tier lr-tier-${activeCard.tier}`}>{TIER_LABEL[activeCard.tier] ?? activeCard.tier}</span>
                   </div>
                   <Stage card={activeCard} />
-                  {activeCard.status === "waiting" && pendingConfirmation && (
+                  {activeCard.status === "waiting" && !isReplay && pendingConfirmation && (
                     <div className="lr-approval">
                       <div><b>AI CoWorker wants to do something that needs your OK.</b><br />The backend blocked it until you decide.</div>
                       <div className="lr-confirm">
-                        <button className="lr-btn lr-btn-ok" onClick={onApprove}>Approve</button>
-                        <button className="lr-btn lr-btn-no" onClick={onDecline}>Decline</button>
+                        <button className="lr-btn lr-btn-ok" onClick={approve}>Approve</button>
+                        <button className="lr-btn lr-btn-no" onClick={decline}>Decline</button>
                       </div>
                     </div>
+                  )}
+                  {activeCard.status === "waiting" && isReplay && (
+                    <div className="lr-approval"><div><b>Paused for approval.</b> The backend blocked this action until the user decided.</div></div>
                   )}
                 </>
               ) : (

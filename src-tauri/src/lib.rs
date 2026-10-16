@@ -3,6 +3,7 @@ mod permission;
 mod tools;
 pub mod agent;
 mod running_commands;
+mod recordings;
 mod egress;
 
 use std::sync::Arc;
@@ -313,6 +314,25 @@ fn list_snapshots_tool(workspace_root: String) -> Result<Vec<SnapshotRecord>, St
     list_snapshots(&ws)
 }
 
+// ---- Run recordings (UI-only, not agent tools): saved outside the workspace ----
+
+#[tauri::command]
+fn save_recording_tool(content: String) -> Result<String, String> {
+    let dir = recordings::recordings_dir().ok_or("No app data folder")?;
+    recordings::save_in(&dir, &content)
+}
+
+#[tauri::command]
+fn list_recordings_tool() -> Vec<recordings::RecordingInfo> {
+    recordings::recordings_dir().map(|d| recordings::list_in(&d)).unwrap_or_default()
+}
+
+#[tauri::command]
+fn load_recording_tool(file: String) -> Result<String, String> {
+    let dir = recordings::recordings_dir().ok_or("No app data folder")?;
+    recordings::load_in(&dir, &file)
+}
+
 /// MCP "Connections" panel: config location, running servers, every MCP tool
 /// with its enforced tier, and servers that failed. reload=true re-reads mcp.json.
 #[tauri::command]
@@ -619,6 +639,9 @@ pub fn run() {
             restore_snapshot_tool,
             list_tool_schemas_tool,
             mcp_status_tool,
+            save_recording_tool,
+            list_recordings_tool,
+            load_recording_tool,
             run_agent_tool
         ])
         .run(tauri::generate_context!())
