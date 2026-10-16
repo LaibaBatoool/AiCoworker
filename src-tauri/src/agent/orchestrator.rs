@@ -531,8 +531,8 @@ mod live_event_tests {
         assert!(matches!(out, LoopOutcome::Done { .. }));
         assert_eq!(std::fs::read_to_string(dir.join("hello.txt")).unwrap(), "hi there");
 
-        let ev = seen.lock().unwrap().clone();
-        let kinds: Vec<String> = ev.iter().map(|e| serde_json::to_value(e).unwrap()["kind"].as_str().unwrap().to_string()).collect();
+        // other tests in this binary may emit too (e.g. model_switched), so keep only this run's kinds
+        let ev: Vec<AgentEvent> = seen.lock().unwrap().iter().filter(|e| !matches!(e, AgentEvent::ModelSwitched { .. })).cloned().collect();        let kinds: Vec<String> = ev.iter().map(|e| serde_json::to_value(e).unwrap()["kind"].as_str().unwrap().to_string()).collect();
         assert_eq!(kinds, vec!["thinking", "tool_started", "tool_finished", "thinking", "answer"], "{:?}", ev);
         match &ev[1] {
             AgentEvent::ToolStarted { name, tier, arguments, .. } => {

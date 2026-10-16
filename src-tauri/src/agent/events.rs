@@ -31,6 +31,8 @@ pub enum AgentEvent {
     Answer { text: String },
     /// The run ended without an answer (safety stop or error).
     Stopped { reason: String },
+        /// The main model ran out of daily quota; the run continues on a backup model.
+    ModelSwitched { from: String, to: String, reason: String },
 }
 
 type Sink = Box<dyn Fn(&AgentEvent) + Send + Sync>;

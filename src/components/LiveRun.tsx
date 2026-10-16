@@ -16,7 +16,8 @@ type AgentEvent =
   | { kind: "tool_finished"; call_id: string; name: string; ok: boolean; preview: string; duration_ms: number }
   | { kind: "needs_confirmation"; name: string; arguments: any }
   | { kind: "answer"; text: string }
-  | { kind: "stopped"; reason: string };
+  | { kind: "stopped"; reason: string }
+  | { kind: "model_switched"; from: string; to: string; reason: string };
 
 type CardStatus = "running" | "ok" | "error" | "waiting" | "declined";
 interface Card {
@@ -480,6 +481,7 @@ export default function LiveRun(props: Props) {
   const [steps, setSteps] = useState(0);
   const [stopReason, setStopReason] = useState<string | null>(null);
   const [answerText, setAnswerText] = useState<string | null>(null);
+  const [modelNote, setModelNote] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [follow, setFollow] = useState(true);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -513,7 +515,7 @@ export default function LiveRun(props: Props) {
   };
 
   function resetView() {
-    setUndo("idle"); setUndoMsg(""); setAnswerText(null); setDecisions({});
+    setUndo("idle"); setUndoMsg(""); setAnswerText(null); setDecisions({}); setModelNote(null);
     setCards([]); setSteps(0); setStopReason(null); setFocusId(null); setFollow(true);
     setBaseline(new Map()); setCurrent(new Map());
   }
@@ -559,6 +561,9 @@ export default function LiveRun(props: Props) {
       case "stopped":
         setPhase("stopped");
         setStopReason(e.reason);
+        break;
+      case "model_switched":
+        setModelNote(`⚡ Daily limit reached on ${e.from} — continuing on backup model ${e.to}`);
         break;
       case "tree": {
         const m = eventToTree(e);
@@ -842,7 +847,9 @@ export default function LiveRun(props: Props) {
           </div>
           <button className="lr-close" onClick={isReplay ? exitReplay : () => setOpen(false)} title={isReplay ? "Exit replay" : "Hide live view"}>✕</button>
         </header>
-        {isReplay && <div className="lr-progress"><div style={{ width: `${progress}%` }} /></div>}
+        {isReplay && <div className="lr-progress">
+        {modelNote && <div className="lr-model-note">{modelNote}</div>}
+        <div style={{ width: `${progress}%` }} /></div>}
 
         <div className="lr-body">
           {/* timeline */}

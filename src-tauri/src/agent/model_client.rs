@@ -57,6 +57,10 @@ pub struct OpenAiCompatibleClient {
     pub base_url: String,
     pub api_key: Option<String>, // None for local Ollama — no key needed
     pub model: String,
+    /// Backup models to switch to when the current one hits its DAILY limit
+    /// (Groq limits are per model, so each backup has its own quota).
+    /// Empty = never switch (the benchmark uses this, to stay on one model).
+    fallbacks: Vec<String>,
     /// Running token/request totals for everything this client has sent.
     /// Read it with `usage()`. A Mutex (not &mut self) so the
     /// ModelClient trait and the orchestrator don't have to change.
@@ -83,6 +87,7 @@ impl OpenAiCompatibleClient {
             base_url: "https://api.groq.com/openai/v1".to_string(),
             api_key: Some(api_key),
             model: model.into(),
+            fallbacks: Vec::new(),
             usage: Default::default(),
         }
     }
@@ -92,8 +97,27 @@ impl OpenAiCompatibleClient {
             base_url: "http://localhost:11434/v1".to_string(),
             api_key: None,
             model: model.into(),
+            fallbacks: Vec::new(),
             usage: Default::default(),
         }
+    }
+
+    /// Adds backup models, tried in order once the main model's daily quota is gone.
+    pub fn with_fallbacks(mut self, fallbacks: Vec<String>) -> Self {
+        self.fallbacks = fallbacks.into_iter().filter(|m| !m.trim().is_empty() && *m != self.model).collect();
+        self
+    }
+
+    /// The main model followed by its backups.
+    fn chain(&self) -> Vec<String> {
+        std::iter::once(self.model.clone()).chain(self.fallbacks.iter().cloned()).collect()
+    }
+
+    /// The model the next request will use: the first one in the chain whose
+    /// daily quota isn't known to be used up. If all are, the main model.
+    pub fn current_model(&self) -> String {
+        let chain = self.chain();
+        chain.iter().find(|m| !is_exhausted(m)).cloned().unwrap_or_else(|| self.model.clone())
     }
 
     /// Snapshot of the totals so far (for the benchmark / UI).
@@ -144,6 +168,37 @@ fn describe_reqwest_error(e: &reqwest::Error) -> String {
         source = s.source();
     }
     msg
+}
+
+// ---- Daily-limit memory, shared by every client in this app session ----
+// run_agent_tool builds a fresh client for every step, so "this model is out of
+// quota until <time>" must live outside the client, or every step would first
+// waste a request on the exhausted model again.
+
+static EXHAUSTED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+    std::sync::OnceLock::new();
+
+fn exhausted_map() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, std::time::Instant>> {
+    EXHAUSTED
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+fn is_exhausted(model: &str) -> bool {
+    exhausted_map().get(model).map(|until| std::time::Instant::now() < *until).unwrap_or(false)
+}
+
+fn mark_exhausted(model: &str, for_secs: f64) {
+    let secs = for_secs.clamp(60.0, 24.0 * 3600.0);
+    exhausted_map().insert(model.to_string(), std::time::Instant::now() + std::time::Duration::from_secs_f64(secs));
+}
+
+/// A 429 that won't clear in a minute: Groq says "... on tokens per day (TPD)"
+/// or "requests per day (RPD)", or asks us to wait longer than we auto-wait.
+pub fn is_daily_limit(message: &str, wait_secs: Option<f64>) -> bool {
+    let m = message.to_lowercase();
+    m.contains("per day") || m.contains("(tpd)") || m.contains("(rpd)") || wait_secs.map(|w| w > MAX_AUTO_WAIT_SECS).unwrap_or(false)
 }
 
 /// Total attempts (first try + retries) for a single model turn.
@@ -216,17 +271,17 @@ impl ModelClient for OpenAiCompatibleClient {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let tool_defs: Vec<Value> = tools.iter().map(to_openai_tool).collect();
 
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": messages,
-            "tools": tool_defs,
-            "tool_choice": "auto",
-        });
-
+        let mut model = self.current_model();
         let mut attempt = 0;
         let raw: Value = loop {
             attempt += 1;
 
+            let body = serde_json::json!({
+                "model": model,
+                "messages": messages,
+                "tools": tool_defs,
+                "tool_choice": "auto",
+            });
             let mut req = client.post(&url).json(&body);
             if let Some(key) = &self.api_key {
                 req = req.bearer_auth(key);
@@ -282,6 +337,34 @@ impl ModelClient for OpenAiCompatibleClient {
             //  - 400 tool_use_failed: the model emitted a malformed/hallucinated
             //    tool call and Groq's validator rejected it. Non-deterministic,
             //    so trying the same turn again often works.
+            // Daily quota gone on this model → switch to the next backup right away
+            // (its quota is separate), instead of failing the whole run.
+            if status.as_u16() == 429 {
+                let hinted = retry_after_header.or_else(|| parse_retry_seconds(message));
+                if is_daily_limit(message, hinted) {
+                    mark_exhausted(&model, hinted.unwrap_or(3600.0));
+                    let chain = self.chain();
+                    if let Some(next) = chain.iter().find(|m| !is_exhausted(m)).cloned() {
+                        eprintln!("Model {} hit its daily limit; switching to backup model {}", model, next);
+                        crate::agent::events::emit(crate::agent::events::AgentEvent::ModelSwitched {
+                            from: model.clone(),
+                            to: next.clone(),
+                            reason: "daily limit reached".to_string(),
+                        });
+                        model = next;
+                        attempt = 0;
+                        self.record_retry();
+                        continue;
+                    }
+                    return Err(format!(
+                        "Model API error ({}): daily limit reached on every configured model ({}). {}",
+                        status,
+                        chain.join(", "),
+                        raw
+                    ));
+                }
+            }
+
             let wait_secs: Option<f64> = if status.as_u16() == 429 {
                 Some(
                     retry_after_header
@@ -325,5 +408,111 @@ impl ModelClient for OpenAiCompatibleClient {
 
         let content = message.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
         Ok(ModelTurn::FinalAnswer(content))
+    }
+}
+// ---------------------------------------------------------------
+// Tests: `cargo test model_client`  (a tiny fake HTTP server, no internet)
+// ---------------------------------------------------------------
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Serves one canned response per connection, in order, and records which
+    /// model each request asked for.
+    async fn fake_api(responses: Vec<(u16, String)>) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen2 = seen.clone();
+        tokio::spawn(async move {
+            for (code, body) in responses {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 8192];
+                loop {
+                    let n = sock.read(&mut tmp).await.unwrap();
+                    buf.extend_from_slice(&tmp[..n]);
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    if let Some(h) = text.find("\r\n\r\n") {
+                        let len: usize = text[..h]
+                            .lines()
+                            .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0)))
+                            .unwrap_or(0);
+                        if buf.len() >= h + 4 + len {
+                            let req: Value = serde_json::from_str(&text[h + 4..]).unwrap_or(Value::Null);
+                            seen2.lock().unwrap().push(req["model"].as_str().unwrap_or("").to_string());
+                            break;
+                        }
+                    }
+                    if n == 0 { break; }
+                }
+                let reason = if code == 200 { "OK" } else { "Too Many Requests" };
+                let resp = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    code, reason, body.len(), body
+                );
+                sock.write_all(resp.as_bytes()).await.unwrap();
+                let _ = sock.shutdown().await;
+            }
+        });
+        (format!("http://{}", addr), seen)
+    }
+
+    fn ok_answer() -> String {
+        serde_json::json!({ "choices": [{ "message": { "content": "hi from backup" } }], "usage": { "total_tokens": 5 } }).to_string()
+    }
+
+    fn daily_429(model: &str) -> String {
+        serde_json::json!({ "error": { "code": "rate_limit_exceeded", "message": format!(
+            "Rate limit reached for model `{}` in organization `org_x` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199990, Requested 900. Please try again in 7m12.5s.", model) } }).to_string()
+    }
+
+    fn client(base: &str, main: &str, backups: &[&str]) -> OpenAiCompatibleClient {
+        let mut c = OpenAiCompatibleClient::groq("test-key".into(), main.to_string())
+            .with_fallbacks(backups.iter().map(|s| s.to_string()).collect());
+        c.base_url = base.to_string();
+        c
+    }
+
+    #[test]
+    fn recognises_daily_limits() {
+        assert!(is_daily_limit("... on tokens per day (TPD): Limit 200000 ...", None));
+        assert!(is_daily_limit("... on requests per day (RPD) ...", Some(3.0)));
+        assert!(is_daily_limit("... tokens per minute (TPM) ...", Some(600.0)), "a long wait counts too");
+        assert!(!is_daily_limit("... on tokens per minute (TPM): Limit 8000 ... try again in 4.5s", Some(4.5)));
+    }
+
+    #[tokio::test]
+    async fn switches_to_backup_on_daily_limit_and_remembers() {
+        let (main, b1) = ("test-main-a", "test-backup-a");
+        let (base, seen) = fake_api(vec![(429, daily_429(main)), (200, ok_answer()), (200, ok_answer())]).await;
+        let c = client(&base, main, &[b1]);
+
+        match c.next_turn(&[], &[]).await.unwrap() {
+            ModelTurn::FinalAnswer(t) => assert_eq!(t, "hi from backup"),
+            _ => panic!("expected an answer"),
+        }
+        assert_eq!(c.current_model(), b1);
+
+        // a NEW client (like the next run_agent_tool step) goes straight to the backup
+        let c2 = client(&base, main, &[b1]);
+        c2.next_turn(&[], &[]).await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![main.to_string(), b1.to_string(), b1.to_string()], "no wasted request on the exhausted model");
+    }
+
+    #[tokio::test]
+    async fn no_backups_means_a_clear_error() {
+        let main = "test-main-b";
+        let (base, _) = fake_api(vec![(429, daily_429(main))]).await;
+        let c = client(&base, main, &[]);
+        let err = c.next_turn(&[], &[]).await.err().expect("should fail");
+        assert!(err.contains("daily limit reached on every configured model") && err.contains(main), "{}", err);
+    }
+
+    #[test]
+    fn fallbacks_skip_blanks_and_the_main_model() {
+        let c = OpenAiCompatibleClient::groq("k".into(), "m1").with_fallbacks(vec!["".into(), "m1".into(), "m2".into()]);
+        assert_eq!(c.chain(), vec!["m1".to_string(), "m2".to_string()]);
     }
 }

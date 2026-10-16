@@ -563,8 +563,18 @@ fn cancel_command_tool(running: tauri::State<Arc<RunningCommands>>, job_id: u64)
     running.cancel(job_id)
 }
 
-// ---- Agent orchestration entry point ----
+/// Backup models for the desktop app (NOT the benchmark, which stays on one model).
+/// Override in src-tauri/.env with AICOWORKER_BACKUP_MODELS=a,b — or "none" to turn it off.
+fn backup_models(main: &str) -> Vec<String> {
+    let list = std::env::var("AICOWORKER_BACKUP_MODELS")
+        .unwrap_or_else(|_| "openai/gpt-oss-20b,qwen/qwen3.8-27b".to_string());
+    if list.trim().eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != main).collect()
+}
 
+// ---- Agent orchestration entry point ----
 #[tauri::command]
 async fn run_agent_tool(
     workspace_root: String,
@@ -576,7 +586,9 @@ async fn run_agent_tool(
     let messages: Vec<agent::model_client::ChatMessage> = serde_json::from_str(&messages_json)
         .map_err(|e| format!("messages_json was not valid: {}", e))?;
 
-    let client = agent::model_client::OpenAiCompatibleClient::groq(api_key, model);
+    // Main model + backups that have their own daily quota (Groq limits are per model).
+    let client = agent::model_client::OpenAiCompatibleClient::groq(api_key, model.clone())
+        .with_fallbacks(backup_models(&model));
     let outcome = agent::orchestrator::run_agent_loop(&client, &workspace_root, messages, resume_confirmed).await;
 
     Ok(match outcome {
