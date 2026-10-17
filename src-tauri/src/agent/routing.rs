@@ -39,14 +39,16 @@ pub fn enabled() -> bool {
 
 /// (group, short label for the model, trigger words)
 const GROUPS: &[(&str, &str, &[&str])] = &[
+        // Only words that clearly name a format. Finding 23: benchmark S1 says 'containing the
+    // WORD "hello"' and the old list ("word", "table", "report", ...) loaded all office tools.
     ("office", "Word/Excel/PDF documents and spreadsheets", &[
-        "doc", "docx", "word", "excel", "xlsx", "xls", "sheet", "spreadsheet", "csv", "table", "pdf",
-        "report", "document", "invoice", "merge", "pages", "column", "row",
+        "docx", "xlsx", "xls", "csv", "pdf", "pdfs", "excel", "spreadsheet", "spreadsheets",
+        "word document", "word file", "ms word", "microsoft word", "powerpoint",
     ]),
     ("web", "fetch public web pages", &["http", "www", "url", "website", "web", "webpage", "link", "online", "internet", "fetch", "download", ".com", ".org"]),
     ("archive", "zip archives", &["zip", "archive", "compress", "unzip", "extract", "tar", "7z"]),
-    ("git", "git history, commits, snapshots and undo", &["git", "commit", "diff", "history", "repo", "repository", "snapshot", "undo", "restore", "revert", "version", "log"]),
-    ("apps", "open a file in its default app", &["open", "launch", "show me", "view it", "preview"]),
+    ("git", "git history, commits, snapshots and undo", &["git", "commit", "diff", "repo", "repository", "snapshot", "snapshots", "undo", "restore", "revert"]),
+    ("apps", "open a file in its default app", &["open it", "open the", "open in", "launch", "show me", "preview"]),
     ("connections", "external tools from connected MCP servers", &["remember", "recall", "forget", "memory", "told you", "mcp", "tool"]),
 ];
 
@@ -248,6 +250,18 @@ mod tests {
         let on = active_groups(&all(), &[user("Remember that my deadline is 20 December")]);
         assert!(on.contains("connections"));
         assert!(!active_groups(&all(), &[user("organise my photos")]).contains("git"), "'log' inside a word doesn't count");
+    }
+
+    
+    #[test]
+    fn everyday_words_dont_load_groups() {
+        // benchmark S1: "word" here is not Microsoft Word (finding 23)
+        let on = active_groups(&all(), &[user("Create a file called notes.txt containing the word \"hello\".")]);
+        assert_eq!(on.into_iter().collect::<Vec<_>>(), vec!["core"]);
+        let on = active_groups(&all(), &[user("Make a table of contents in README.md and check the log file version")]);
+        assert_eq!(on.into_iter().collect::<Vec<_>>(), vec!["core"]);
+        assert!(active_groups(&all(), &[user("Write a Word document about rain")]).contains("office"));
+        assert!(active_groups(&all(), &[user("merge a.pdf and b.pdf")]).contains("office"));
     }
 
     #[test]
