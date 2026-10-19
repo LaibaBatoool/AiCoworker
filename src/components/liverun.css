@@ -296,3 +296,7 @@
   font-size: 10px; color: #fff; transition: background 0.25s, border-color 0.25s; }
 .lr-checklist li.done .lr-check { background: var(--lr-green); border-color: var(--lr-green); animation: lr-tick 0.3s ease; }
 @keyframes lr-tick { from { transform: scale(0.4); } to { transform: scale(1); } }
+
+
+/* ---- 📄 Export report ---- */
+.lr-report { align-self: stretch; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }

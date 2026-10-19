@@ -4,6 +4,7 @@ mod tools;
 pub mod agent;
 mod running_commands;
 mod recordings;
+mod reports;
 mod egress;
 
 use std::sync::Arc;
@@ -320,6 +321,16 @@ fn list_snapshots_tool(workspace_root: String) -> Result<Vec<SnapshotRecord>, St
 fn save_recording_tool(content: String) -> Result<String, String> {
     let dir = recordings::recordings_dir().ok_or("No app data folder")?;
     recordings::save_in(&dir, &content)
+}
+
+/// Saves a run report (HTML built by the Live view) and opens it in the default browser.
+#[tauri::command]
+fn save_report_tool(html: String, started_at: u64) -> Result<String, String> {
+    let dir = reports::reports_dir().ok_or("No app data folder")?;
+    let path = reports::save_in(&dir, &html, started_at)?;
+    // opening is a convenience: the report is saved even if no browser opens
+    let _ = tauri_plugin_opener::open_path(&path, None::<&str>);
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -660,6 +671,7 @@ pub fn run() {
             save_recording_tool,
             list_recordings_tool,
             load_recording_tool,
+            save_report_tool,
             run_agent_tool
         ])
         .run(tauri::generate_context!())

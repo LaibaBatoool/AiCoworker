@@ -493,6 +493,92 @@ function ReplayList({ onPick, onClose }: { onPick: (file: string) => void; onClo
   );
 }
 
+// ---------- run report (📄 Export report): one self-contained HTML page ----------
+interface ReportData {
+  goal: string; startedAt: number; seconds: number; outcome: "done" | "stopped"; answer: string;
+  cards: Card[]; plan: any; files: [string, FileMark][]; decisions: Record<string, boolean>; modelNote: string | null; replay: boolean;
+}
+
+const esc = (v: unknown) =>
+  String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+
+function buildReport(d: ReportData): string {
+  const plan: { text: string; done: boolean }[] = Array.isArray(d.plan) ? d.plan.filter((x: any) => x && typeof x.text === "string") : [];
+  const checks = d.cards.filter((c) => c.name === "claim_check" || c.name === "checklist_check");
+  const tiers = { safe: 0, mutating: 0, privileged: 0 } as Record<string, number>;
+  d.cards.forEach((c) => { if (c.tier in tiers) tiers[c.tier]++; });
+  const approvals = Object.values(d.decisions);
+  const stepRows = d.cards.map((c, i) => {
+    const decided = d.decisions[c.id];
+    const result = checks.includes(c) ? (c.status === "ok" ? "✓ passed" : "! caught") : c.status === "ok" ? "✓ ok" : c.status === "declined" ? "⊘ declined" : c.status === "waiting" ? "⏸ waiting" : c.status === "running" ? "…" : "✕ error";
+    return `<tr class="${c.status}"><td>${i + 1}</td><td>${esc(describe(c.name, c.args))}<div class="tool">${esc(c.name)}</div>${
+      c.status === "error" || checks.includes(c) ? `<div class="note">${esc(c.preview.slice(0, 300))}</div>` : ""
+    }</td><td><span class="tier ${esc(c.tier)}">${esc(TIER_LABEL[c.tier] ?? c.tier)}</span>${
+      decided === undefined ? "" : `<div class="note">${decided ? "you approved" : "you declined"}</div>`
+    }</td><td>${result}</td><td>${c.durationMs !== undefined ? esc(fmtMs(c.durationMs)) : ""}</td></tr>`;
+  }).join("");
+  const fileRows = d.files.map(([p, m]) => `<li><span class="mark ${esc(m)}">${esc(m)}</span> ${esc(p)}</li>`).join("");
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI CoWorker run report</title>
+<style>
+  :root { --ink:#1d1b2e; --muted:#6b6785; --line:#e4e1f0; --violet:#6d28d9; --green:#15803d; --amber:#b45309; --red:#b91c1c; --bg:#fbfaff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 32px 20px 48px; }
+  .brand { color: var(--violet); font-weight: 700; letter-spacing: .04em; font-size: 12px; text-transform: uppercase; }
+  h1 { font-size: 22px; margin: 4px 0 4px; }
+  h2 { font-size: 15px; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .meta { color: var(--muted); }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .badge.done { background: #dcfce7; color: var(--green); } .badge.stopped { background: #fee2e2; color: var(--red); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 16px; }
+  .stats div { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .stats b { display: block; font-size: 20px; } .stats span { color: var(--muted); font-size: 12px; }
+  .box { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  pre { white-space: pre-wrap; word-break: break-word; margin: 0; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+  ul { margin: 0; padding-left: 0; list-style: none; } li { padding: 3px 0; }
+  .tick { display: inline-block; width: 18px; color: var(--green); font-weight: 700; } .open { color: var(--red); }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: #f6f4fd; }
+  tr.error td:nth-child(4) { color: var(--red); } tr.ok td:nth-child(4) { color: var(--green); } tr.declined td:nth-child(4) { color: var(--amber); }
+  .tool { color: var(--muted); font: 11px ui-monospace, Consolas, monospace; } .note { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .tier { font-size: 11.5px; padding: 1px 7px; border-radius: 99px; white-space: nowrap; }
+  .tier.safe { background: #dcfce7; color: var(--green); } .tier.mutating { background: #dbeafe; color: #1d4ed8; } .tier.privileged { background: #fef3c7; color: var(--amber); }
+  .mark { font-size: 11.5px; padding: 1px 7px; border-radius: 99px; } .mark.new { background: #dcfce7; color: var(--green); }
+  .mark.edited { background: #dbeafe; color: #1d4ed8; } .mark.deleted { background: #fee2e2; color: var(--red); }
+  footer { margin-top: 32px; color: var(--muted); font-size: 12px; }
+  @media print { body { background: #fff; } main { padding: 0; } }
+</style></head>
+<body><main>
+  <div class="brand">AI CoWorker · run report</div>
+  <h1>${esc(d.goal || "Agent run")}</h1>
+  <div class="meta"><span class="badge ${d.outcome}">${d.outcome === "done" ? "Finished" : "Stopped"}</span>
+    · ${esc(fmtDate(d.startedAt))} · ${d.seconds.toFixed(1)} s${d.replay ? " · from a saved replay" : ""}</div>
+  <div class="stats">
+    <div><b>${d.cards.length}</b><span>actions</span></div>
+    <div><b>${tiers.safe}</b><span>read-only</span></div>
+    <div><b>${tiers.mutating}</b><span>changed files (snapshotted)</span></div>
+    <div><b>${tiers.privileged}</b><span>needed approval</span></div>
+    <div><b>${d.files.length}</b><span>files changed</span></div>
+  </div>
+  ${d.modelNote ? `<h2>Model</h2><div class="box">${esc(d.modelNote)}</div>` : ""}
+  ${plan.length ? `<h2>Plan (${plan.filter((x) => x.done).length}/${plan.length} done)</h2><div class="box"><ul>${plan
+    .map((x) => `<li><span class="tick ${x.done ? "" : "open"}">${x.done ? "✓" : "○"}</span>${esc(x.text)}</li>`).join("")}</ul></div>` : ""}
+  ${checks.length ? `<h2>Backend checks</h2><div class="box"><ul>${checks
+    .map((c) => `<li><span class="tick ${c.status === "ok" ? "" : "open"}">${c.status === "ok" ? "✓" : "!"}</span>${esc(c.preview)}</li>`).join("")}</ul></div>` : ""}
+  <h2>Steps</h2>
+  <table><thead><tr><th>#</th><th>Action</th><th>Tier (enforced by the backend)</th><th>Result</th><th>Time</th></tr></thead><tbody>${stepRows || `<tr><td colspan="5">No tool calls.</td></tr>`}</tbody></table>
+  <h2>Files changed</h2>
+  <div class="box">${fileRows ? `<ul>${fileRows}</ul>` : "No files changed."}</div>
+  <h2>${d.outcome === "done" ? "Final answer" : "Why it stopped"}</h2>
+  <div class="box"><pre>${esc(d.answer)}</pre></div>
+  <footer>Generated by AI CoWorker. Tiers are enforced in the backend (safe = read-only, mutating = snapshotted before it runs, privileged = blocked until approved). The full audit log is in the workspace's .aicoworker folder.${
+    approvals.length ? ` Approvals in this run: ${approvals.filter(Boolean).length} approved, ${approvals.filter((x) => !x).length} declined.` : ""}</footer>
+</main></body></html>`;
+}
+
 function friendlyReason(r: string): string {
   if (/429|rate.?limit|Too Many Requests/i.test(r))
     return "The AI provider's free-tier rate limit was reached (HTTP 429), so the run paused here.\nEverything done so far is saved (see the steps on the left). Wait a bit, or try again tomorrow if the daily quota is used up.";
@@ -520,6 +606,8 @@ export default function LiveRun(props: Props) {
   const [current, setCurrent] = useState<Map<string, FileInfo>>(new Map());
   const [undo, setUndo] = useState<"idle" | "confirm" | "working" | "undone" | "error">("idle");
   const [undoMsg, setUndoMsg] = useState("");
+  const [reportMsg, setReportMsg] = useState("");
+
   // replay
   const [mode, setMode] = useState<"live" | "replay">("live");
   const [showList, setShowList] = useState(false);
@@ -544,7 +632,7 @@ export default function LiveRun(props: Props) {
   };
 
   function resetView() {
-    setUndo("idle"); setUndoMsg(""); setAnswerText(null); setDecisions({}); setModelNote(null);
+    setUndo("idle"); setUndoMsg(""); setReportMsg(""); setAnswerText(null); setDecisions({}); setModelNote(null);
     setCards([]); setSteps(0); setStopReason(null); setFocusId(null); setFollow(true);
     setBaseline(new Map()); setCurrent(new Map());
   }
@@ -800,6 +888,27 @@ export default function LiveRun(props: Props) {
     </div>
   ) : null;
 
+    async function exportReport() {
+    const start = isReplay ? replay!.started_at : rec.current?.started_at ?? startedAt ?? Date.now();
+    const html = buildReport({
+      goal: shownGoal, startedAt: start, seconds: elapsed, outcome: phase === "done" ? "done" : "stopped",
+      answer: phase === "done" ? shownAnswer : friendlyReason(stopReason ?? status),
+      cards, plan, files: changedFiles, decisions, modelNote, replay: isReplay,
+    });
+    try {
+      const path = await invoke<string>("save_report_tool", { html, startedAt: start });
+      setReportMsg(`Saved and opened: ${path}`);
+    } catch (err) {
+      setReportMsg(`Couldn't save the report: ${err}`);
+    }
+  }
+  const reportBar = !active && cards.length > 0 ? (
+    <div className="lr-report">
+      <button className="lr-btn lr-btn-undo" onClick={exportReport}>📄 Export report</button>
+      {reportMsg && <div className="lr-undo-msg">{reportMsg}</div>}
+    </div>
+  ) : null;
+
   // what goes where Approve/Decline would be: real buttons live, the recorded choice in a replay
   const confirmArea = (c: Card) => {
     if (isReplay) {
@@ -932,6 +1041,7 @@ export default function LiveRun(props: Props) {
                     </div>
                   )}
                   {undoBar}
+                  {reportBar}
                 </div>
               ) : phase === "stopped" && follow && !active ? (
                 <div className="lr-done lr-stopped">
@@ -939,6 +1049,7 @@ export default function LiveRun(props: Props) {
                   <div className="lr-done-title">Run stopped</div>
                   <pre className="lr-answer">{friendlyReason(stopReason ?? status)}</pre>
                   {undoBar}
+                  {reportBar}
                 </div>
               ) : activeCard ? (
                 <>
