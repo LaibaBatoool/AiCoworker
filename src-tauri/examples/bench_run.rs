@@ -206,6 +206,10 @@ async fn main() {
                 "confirmations": run.confirmations,
                 "confirmed_tools": run.confirmed_tools,
                 "answer": run.answer.chars().take(600).collect::<String>(),
+                // how often the claim check sent "file X doesn't exist" back to the model
+                "claim_checks": run.messages.iter().filter(|m| m.role == "user" && m.content.as_deref().map(|c| c.starts_with(aicoworker_lib::agent::claims::MARKER)).unwrap_or(false)).count(),
+                // true if the model kept lying and the user got the ⚠ warning
+                "claim_flagged": run.answer.contains("⚠ Backend check"),
             })
         }
         Err(_) => json!({ "status": "timeout", "reason": format!("exceeded {}s", timeout_secs), "seconds": seconds }),

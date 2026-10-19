@@ -204,12 +204,13 @@ for (const t of tasks) {
       prompt_tokens: res.prompt_tokens || 0, completion_tokens: res.completion_tokens || 0,
       total_tokens: res.total_tokens || 0, api_calls: res.api_calls || 0, api_retries: res.api_retries || 0,
       verify_status: verifyStatus, verify_reason: verifyReason,
+      claim_checks: res.claim_checks || 0, claim_flagged: res.claim_flagged || false,
     };
     session.push(rec);
     all.push(rec);
     fs.writeFileSync(RUNS, JSON.stringify(all, null, 2)); // saved after every trial
 
-    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${rec.total_tokens} tok | ${verifyStatus}${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
+    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${rec.total_tokens} tok | ${verifyStatus}${rec.claim_checks ? ` | 🔍 claim check fired${rec.claim_flagged ? " (user warned)" : " (agent fixed it)"}` : ""}${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
 
     if (isDailyLimit(res)) {
       const hint = retryHint(res);
