@@ -11,11 +11,13 @@ import { fileURLToPath } from "node:url";
 const RUNS = path.join(path.dirname(fileURLToPath(import.meta.url)), "runs.json");
 const runs = JSON.parse(fs.readFileSync(RUNS, "utf8"));
 const only = (process.argv[2] || "").split(",").map((s) => s.trim()).filter(Boolean);
-const by = process.argv[3] || "routing"; // "routing" or "claim_check"
-const other = by === "routing" ? "claim_check" : "routing"; // held OFF on both sides, so only one thing changes
+const FEATURES = ["routing", "claim_check", "checklist"];
+const by = process.argv[3] || "routing"; // one of FEATURES
+if (!FEATURES.includes(by)) { console.log(`Unknown feature "${by}". Use one of: ${FEATURES.join(", ")}`); process.exit(1); }
+const others = FEATURES.filter((f) => f !== by); // held OFF on both sides, so only one thing changes
 const model = "openai/gpt-oss-120b";
 
-const real = runs.filter((r) => r.model === model && r.verify_status !== "API_ERROR" && (r.total_tokens || 0) > 0 && (r[other] ?? false) === false);
+const real = runs.filter((r) => r.model === model && r.verify_status !== "API_ERROR" && (r.total_tokens || 0) > 0 && others.every((f) => (r[f] ?? false) === false));
 const ids = [...new Set(real.map((r) => r.id))].filter((id) => !only.length || only.includes(id));
 
 const stats = (rs) => {

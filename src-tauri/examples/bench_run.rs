@@ -209,7 +209,11 @@ async fn main() {
                 // how often the claim check sent "file X doesn't exist" back to the model
                 "claim_checks": run.messages.iter().filter(|m| m.role == "user" && m.content.as_deref().map(|c| c.starts_with(aicoworker_lib::agent::claims::MARKER)).unwrap_or(false)).count(),
                 // true if the model kept lying and the user got the ⚠ warning
-                "claim_flagged": run.answer.contains("⚠ Backend check"),
+                "claim_flagged": run.answer.contains("⚠ Backend check: these files"),
+                // task checklist: did the agent make one, how often did the gate fire, was the user warned
+                "checklist_used": run.messages.iter().any(|m| m.tool_calls.as_ref().map(|t| t.iter().any(|c| c.function.name == aicoworker_lib::agent::checklist::TOOL)).unwrap_or(false)),
+                "checklist_checks": run.messages.iter().filter(|m| m.role == "user" && m.content.as_deref().map(|c| c.starts_with(aicoworker_lib::agent::checklist::MARKER)).unwrap_or(false)).count(),
+                "checklist_flagged": run.answer.contains("⚠ Backend check: checklist"),
             })
         }
         Err(_) => json!({ "status": "timeout", "reason": format!("exceeded {}s", timeout_secs), "seconds": seconds }),

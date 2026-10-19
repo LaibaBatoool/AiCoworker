@@ -124,7 +124,10 @@ async fn run_agent_loop_inner(
         let trimmed_for_model = trim_history_for_request(&messages);
 
         // only the tools this goal needs (all of them when routing is off)
-        let tools = crate::agent::routing::select(&all_tools, &messages);
+        let mut tools = crate::agent::routing::select(&all_tools, &messages);
+        if crate::agent::checklist::enabled() {
+            tools.push(crate::agent::checklist::schema()); // the to-do list tool (handled here, not dispatch)
+        }
         let turn = match client.next_turn(&trimmed_for_model, &tools).await {
             Ok(t) => t,
             Err(e) => return LoopOutcome::Error(format!("Model call failed: {}", e)),
@@ -138,6 +141,46 @@ async fn run_agent_loop_inner(
                     tool_calls: None,
                     tool_call_id: None,
                 });
+                // Checklist gate (finding 29): items the agent listed must be ticked.
+                // One retry, then the user is told which items are still open.
+                if crate::agent::checklist::enabled() {
+                    use crate::agent::checklist;
+                    let open = checklist::open_items(&messages);
+                    if !open.is_empty() {
+                        let already = messages.iter().any(|m| {
+                            m.role == "user" && m.content.as_deref().map(|c| c.starts_with(checklist::MARKER)).unwrap_or(false)
+                        });
+                        let card = format!("checklist-check-{}", step + 1);
+                        events::emit(AgentEvent::ToolStarted {
+                            call_id: card.clone(),
+                            name: "checklist_check".to_string(),
+                            arguments: serde_json::json!({ "open": open }),
+                            tier: "safe".to_string(),
+                        });
+                        events::emit(AgentEvent::ToolFinished {
+                            call_id: card,
+                            name: "checklist_check".to_string(),
+                            ok: false,
+                            preview: if already {
+                                format!("Still open after one retry: {}", open.join("; "))
+                            } else {
+                                format!("Open items: {} — sent back to the agent", open.join("; "))
+                            },
+                            duration_ms: 0,
+                        });
+                        if !already {
+                            messages.push(ChatMessage {
+                                role: "user".to_string(),
+                                content: Some(checklist::feedback(&open)),
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
+                            continue; // one more chance to finish
+                        }
+                        let answer = format!("{}\n\n⚠ Backend check: checklist items not marked done: {}.", answer, open.join("; "));
+                        return LoopOutcome::Done { messages, answer };
+                    }
+                }
                 // Claim check (findings 3, 14, 21, 24): files the answer says were
                 // created must exist. One retry, then the user is told the truth.
                 if crate::agent::claims::enabled() {
@@ -233,7 +276,7 @@ async fn run_agent_loop_inner(
 /// execute_command is classified per command, MCP tools use the user's config,
 /// everything else uses the registry. Unknown = privileged.
 fn real_tier(workspace_root: &str, name: &str, args: &Value) -> String {
-    if name == crate::agent::routing::REQUEST_TOOLS {
+    if name == crate::agent::routing::REQUEST_TOOLS || name == crate::agent::checklist::TOOL {
         return "safe".to_string();
     }
     if name == "execute_command" {
@@ -419,6 +462,8 @@ fn process_pending_tool_calls(
         let started = std::time::Instant::now();
         let result = if call.function.name == crate::agent::routing::REQUEST_TOOLS {
             crate::agent::routing::handle_request(all_tools, &args) // loads a tool group, touches nothing
+        } else if crate::agent::checklist::TOOL == call.function.name {
+            crate::agent::checklist::handle(&args) // updates the to-do list, touches nothing
         } else {
             crate::agent::dispatch::dispatch_tool_call(workspace_root, &call.function.name, &args, confirmed_this_call)
         };
@@ -745,6 +790,117 @@ mod claim_check_tests {
         let LoopOutcome::Done { answer, messages } = out else { panic!("expected Done") };
         assert!(answer.contains("Backend check") && answer.contains("summary.md"), "{}", answer);
         assert_eq!(messages.iter().filter(|m| m.role == "user").count(), 2, "goal + exactly one check message");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+
+#[cfg(test)]
+mod checklist_tests {
+    use super::*;
+    use crate::agent::model_client::{ToolCallFunction, ToolCallRequest};
+    use crate::tools::registry::ToolSchema;
+    use std::sync::Mutex;
+
+    fn tc(id: &str, name: &str, args: &str) -> ModelTurn {
+        ModelTurn::ToolCalls(vec![ToolCallRequest { id: id.into(), kind: "function".into(), function: ToolCallFunction { name: name.into(), arguments: args.into() } }])
+    }
+    const PLAN: &str = r#"{"items":[{"text":"write a.txt","done":false},{"text":"write b.txt","done":false}]}"#;
+    const HALF: &str = r#"{"items":[{"text":"write a.txt","done":true},{"text":"write b.txt","done":false}]}"#;
+    const ALL: &str = r#"{"items":[{"text":"write a.txt","done":true},{"text":"write b.txt","done":true}]}"#;
+
+    /// Plans 2 items, does 1, says "done"; after the gate, does the other one.
+    struct Forgetful {
+        turn: Mutex<usize>,
+        offered_tool: Mutex<bool>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelClient for Forgetful {
+        async fn next_turn(&self, _m: &[ChatMessage], t: &[ToolSchema]) -> Result<ModelTurn, String> {
+            if t.iter().any(|x| x.name == crate::agent::checklist::TOOL) {
+                *self.offered_tool.lock().unwrap() = true;
+            }
+            let mut n = self.turn.lock().unwrap();
+            *n += 1;
+            Ok(match *n {
+                1 => tc("p", "update_checklist", PLAN),
+                2 => tc("w1", "write_file", r#"{"relative_path":"a.txt","content":"a"}"#),
+                3 => tc("t1", "update_checklist", HALF),
+                4 => ModelTurn::FinalAnswer("All done.".into()),
+                5 => tc("w2", "write_file", r#"{"relative_path":"b.txt","content":"b"}"#),
+                6 => tc("t2", "update_checklist", ALL),
+                _ => ModelTurn::FinalAnswer("Both files written.".into()),
+            })
+        }
+    }
+
+    /// Plans 2 items, ticks 1, and keeps saying it's done.
+    struct Quitter {
+        turn: Mutex<usize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelClient for Quitter {
+        async fn next_turn(&self, _m: &[ChatMessage], _t: &[ToolSchema]) -> Result<ModelTurn, String> {
+            let mut n = self.turn.lock().unwrap();
+            *n += 1;
+            Ok(match *n {
+                1 => tc("p", "update_checklist", HALF),
+                _ => ModelTurn::FinalAnswer("Done.".into()),
+            })
+        }
+    }
+
+    fn dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("aicw_checklist_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+    fn goal() -> Vec<ChatMessage> {
+        vec![ChatMessage { role: "user".into(), content: Some("write a.txt and b.txt".into()), tool_calls: None, tool_call_id: None }]
+    }
+
+    #[tokio::test]
+    async fn open_items_get_a_second_chance() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::checklist::set_enabled(true);
+        let d = dir("retry");
+        let client = Forgetful { turn: Mutex::new(0), offered_tool: Mutex::new(false) };
+        let out = run_agent_loop(&client, d.to_str().unwrap(), goal(), false).await;
+        crate::agent::checklist::set_enabled(false);
+        let LoopOutcome::Done { answer, messages } = out else { panic!("expected Done") };
+        assert!(*client.offered_tool.lock().unwrap(), "the model is offered update_checklist");
+        assert!(d.join("b.txt").exists(), "the forgotten item was done after the gate");
+        assert!(!answer.contains("Backend check"), "{}", answer);
+        assert!(messages.iter().any(|m| m.content.as_deref().unwrap_or("").starts_with(crate::agent::checklist::MARKER)));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn still_open_items_are_shown_to_the_user() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::checklist::set_enabled(true);
+        let d = dir("flag");
+        let out = run_agent_loop(&Quitter { turn: Mutex::new(0) }, d.to_str().unwrap(), goal(), false).await;
+        crate::agent::checklist::set_enabled(false);
+        let LoopOutcome::Done { answer, messages } = out else { panic!("expected Done") };
+        assert!(answer.contains("Backend check") && answer.contains("write b.txt"), "{}", answer);
+        assert_eq!(messages.iter().filter(|m| m.role == "user").count(), 2, "goal + exactly one checklist message");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn off_means_no_tool_and_no_gate() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::checklist::set_enabled(false);
+        let d = dir("off");
+        let client = Forgetful { turn: Mutex::new(0), offered_tool: Mutex::new(false) };
+        let out = run_agent_loop(&client, d.to_str().unwrap(), goal(), false).await;
+        let LoopOutcome::Done { answer, .. } = out else { panic!("expected Done") };
+        assert!(!*client.offered_tool.lock().unwrap(), "benchmark default: tool not offered");
+        assert_eq!(answer, "All done.", "no gate when off");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

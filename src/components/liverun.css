@@ -281,3 +281,18 @@
 .lr-model-note { padding: 7px 18px; font-size: 12.5px; color: #fde68a; background: rgba(245, 158, 11, 0.1);
   border-bottom: 1px solid rgba(245, 158, 11, 0.35); animation: lr-slide-in 0.3s ease-out; }
   
+
+/* ---- task checklist (update_checklist) ---- */
+.lr-checklist { background: var(--lr-panel-2); border: 1px solid var(--lr-line); border-radius: 10px; padding: 10px 12px; }
+.lr-checklist-pinned { position: sticky; top: 0; z-index: 2; margin: 8px 10px 0; box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35); max-height: 38%; overflow-y: auto; }
+.lr-checklist-head { display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; color: var(--lr-text); }
+.lr-checklist-all { color: var(--lr-green); }
+.lr-checklist-bar { height: 4px; border-radius: 4px; background: var(--lr-line); margin: 7px 0 8px; overflow: hidden; }
+.lr-checklist-bar > div { height: 100%; background: linear-gradient(90deg, var(--lr-violet), var(--lr-green)); transition: width 0.4s ease; }
+.lr-checklist ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.lr-checklist li { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--lr-text); line-height: 1.35; }
+.lr-checklist li.done > span:last-child { color: var(--lr-muted); text-decoration: line-through; }
+.lr-check { flex: 0 0 15px; height: 15px; border: 1.5px solid var(--lr-muted); border-radius: 4px; display: grid; place-items: center;
+  font-size: 10px; color: #fff; transition: background 0.25s, border-color 0.25s; }
+.lr-checklist li.done .lr-check { background: var(--lr-green); border-color: var(--lr-green); animation: lr-tick 0.3s ease; }
+@keyframes lr-tick { from { transform: scale(0.4); } to { transform: scale(1); } }

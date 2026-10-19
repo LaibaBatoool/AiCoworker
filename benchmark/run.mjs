@@ -40,6 +40,8 @@ const since = arg("since", "");
 const ROUTING = /^(on|1|true)$/i.test(process.env.AICOWORKER_TOOL_ROUTING || "");
 // claim check on/off (env AICOWORKER_CLAIM_CHECK), recorded and matched the same way
 const CLAIM = /^(on|1|true)$/i.test(process.env.AICOWORKER_CLAIM_CHECK || "");
+// task checklist on/off (env AICOWORKER_CHECKLIST), recorded and matched the same way
+const CHECKLIST = /^(on|1|true)$/i.test(process.env.AICOWORKER_CHECKLIST || "");
 const BENCH_VERSION = (fs.readFileSync(BENCH, "utf8").match(/\((v[\d.]+)\)/) || [])[1] || "unknown";
 
 const sleep = (s) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, s * 1000);
@@ -147,13 +149,13 @@ let tasks = listTasks();
 if (only.length) tasks = tasks.filter((t) => only.includes(t.id));
 if (!tasks.length) { console.error("No matching tasks."); process.exit(1); }
 
-console.log(`\nRunning ${tasks.length} task(s) x ${trials} trial(s) | model ${model} | confirmations: ${confirm} | benchmark ${BENCH_VERSION}${ROUTING ? " | tool routing: ON" : ""}${CLAIM ? " | claim check: ON" : ""} ${since ? ` | resuming since ${since}` : ""}\n`);
+console.log(`\nRunning ${tasks.length} task(s) x ${trials} trial(s) | model ${model} | confirmations: ${confirm} | benchmark ${BENCH_VERSION}${ROUTING ? " | tool routing: ON" : ""}${CLAIM ? " | claim check: ON" : ""}${CHECKLIST ? " | checklist: ON" : ""}${since ? ` | resuming since ${since}` : ""}\n`);
 
 const session = [];
 const all = loadRuns();
 // trials already finished for this task (same model, since --since, real verdicts only)
 const doneBefore = (id) =>
-  since ? all.filter((r) => r.id === id && r.model === model && r.at >= since && r.verify_status !== "API_ERROR" && (r.routing ?? false) === ROUTING && (r.claim_check ?? false) === CLAIM).length : 0;
+  since ? all.filter((r) => r.id === id && r.model === model && r.at >= since && r.verify_status !== "API_ERROR" && (r.routing ?? false) === ROUTING && (r.claim_check ?? false) === CLAIM && (r.checklist ?? false) === CHECKLIST).length : 0;
 let apiErrorStreak = 0;
 let aborted = false;
 
@@ -197,6 +199,7 @@ for (const t of tasks) {
       bench_version: BENCH_VERSION,
       routing: ROUTING,
       claim_check: CLAIM,
+      checklist: CHECKLIST,
       agent_status: res.status, agent_reason: res.reason || "",
       seconds: Number((res.seconds || 0).toFixed(1)),
       model_turns: res.model_turns || 0, tool_calls: res.tool_calls || 0, tool_errors: res.tool_errors || 0,
@@ -205,12 +208,13 @@ for (const t of tasks) {
       total_tokens: res.total_tokens || 0, api_calls: res.api_calls || 0, api_retries: res.api_retries || 0,
       verify_status: verifyStatus, verify_reason: verifyReason,
       claim_checks: res.claim_checks || 0, claim_flagged: res.claim_flagged || false,
+      checklist_used: res.checklist_used || false, checklist_checks: res.checklist_checks || 0, checklist_flagged: res.checklist_flagged || false,
     };
     session.push(rec);
     all.push(rec);
     fs.writeFileSync(RUNS, JSON.stringify(all, null, 2)); // saved after every trial
 
-    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${rec.total_tokens} tok | ${verifyStatus}${rec.claim_checks ? ` | 🔍 claim check fired${rec.claim_flagged ? " (user warned)" : " (agent fixed it)"}` : ""}${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
+    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${rec.total_tokens} tok | ${verifyStatus}${rec.checklist_used ? " | 📋 plan" : ""}${rec.checklist_checks ? ` | ☑️ checklist gate fired${rec.checklist_flagged ? " (user warned)" : " (agent finished)"}` : ""}${rec.claim_checks ? ` | 🔍 claim check fired${rec.claim_flagged ? " (user warned)" : " (agent fixed it)"}` : ""}${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
 
     if (isDailyLimit(res)) {
       const hint = retryHint(res);

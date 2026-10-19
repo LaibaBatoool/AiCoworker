@@ -121,6 +121,12 @@ function describe(name: string, a: any): string {
     case "git_log": return "Reading git history";
     case "open_in_default_app": return `Opening ${p}`;
     case "request_tools": return `Loading the ${a?.group ?? ""} tools`;
+    case "update_checklist": {
+      const it = Array.isArray(a?.items) ? a.items : [];
+      const d = it.filter((x: any) => x?.done).length;
+      return d === 0 ? `Planning: ${it.length} item${it.length === 1 ? "" : "s"}` : `Checklist: ${d}/${it.length} done`;
+    }
+    case "checklist_check": return Array.isArray(a?.open) && a.open.length ? `Checking the list: ${a.open.length} still open` : "Checking the checklist";
     case "claim_check": return Array.isArray(a?.missing) && a.missing.length ? `Checking claims: ${a.missing.join(", ")} missing` : "Checking the agent's claims";
 
     default:
@@ -138,7 +144,7 @@ function icon(name: string): string {
     write_file: "✍️", edit_file: "🩹", read_file: "📖", create_docx: "📝", create_xlsx: "📊",
     read_spreadsheet: "📊", list_directory: "📂", search_files: "🔎", get_file_metadata: "ℹ️",
     create_directory: "📁", delete_file: "🗑️", move_rename: "↪️", execute_command: "⌨️",
-    fetch_url: "🌐", request_tools: "🧰", claim_check: "🔍", convert_to_pdf: "📄", git_commit: "🌿", git_diff: "🌿", git_status: "🌿", git_log: "🌿",
+    fetch_url: "🌐", request_tools: "🧰", claim_check: "🔍", update_checklist: "📋", checklist_check: "☑️", convert_to_pdf: "📄", git_commit: "🌿", git_diff: "🌿", git_status: "🌿", git_log: "🌿",
   };
   return m[name] ?? "🛠️";
 }
@@ -324,10 +330,30 @@ function GenericStage({ card }: { card: Card }) {
     </div>
   );
 }
+// the agent's to-do list (update_checklist): pinned on top of the steps, and on the stage
+function Checklist({ items, pinned }: { items: any; pinned?: boolean }) {
+  const list: { text: string; done: boolean }[] = Array.isArray(items) ? items.filter((x: any) => x && typeof x.text === "string") : [];
+  const done = list.filter((x) => x.done).length;
+  return (
+    <div className={`lr-checklist ${pinned ? "lr-checklist-pinned" : ""}`}>
+      <div className="lr-checklist-head">
+        <span>📋 Plan</span>
+        <span className={done === list.length ? "lr-checklist-all" : "lr-muted"}>{done}/{list.length}</span>
+      </div>
+      <div className="lr-checklist-bar"><div style={{ width: `${list.length ? (done / list.length) * 100 : 0}%` }} /></div>
+      <ul>
+        {list.map((x, i) => (
+          <li key={i} className={x.done ? "done" : ""}><span className="lr-check">{x.done ? "✓" : ""}</span><span>{x.text}</span></li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function Stage({ card }: { card: Card }) {
   const a = card.args ?? {};
   switch (card.name) {
+    case "update_checklist": return <Checklist items={a.items} />;
     case "write_file": return <EditorStage key={card.id} path={a.relative_path ?? ""} content={String(a.content ?? "")} />;
     case "edit_file": return <DiffStage key={card.id} path={a.relative_path ?? ""} oldText={String(a.old_text ?? "")} newText={String(a.new_text ?? "")} />;
     case "create_xlsx": return <SheetStage key={card.id} args={a} />;
@@ -652,7 +678,7 @@ export default function LiveRun(props: Props) {
       const r = rec.current;
       rec.current = r; // keep recording the final tree
       setTimeout(() => {
-        if (r && r.events.length > 0) invoke("save_recording_tool", { content: JSON.stringify(r) }).catch(() => {});
+        if (r && r.events.length > 0) invoke("save_recording_tool", { content: JSON.stringify(r) }).catch(() => { });
         if (rec.current === r) rec.current = null;
       }, 2500);
     }
@@ -744,6 +770,7 @@ export default function LiveRun(props: Props) {
   const tree = useMemo(() => buildTree(current, marks, ghosts), [current, marks, ghosts]);
   const changedFiles = [...marks.entries()].filter(([p]) => !(current.get(p)?.isDir ?? ghosts.get(p)?.isDir));
   const activeCard = cards.find((c) => c.id === focusId) ?? cards[cards.length - 1];
+  const plan = [...cards].reverse().find((c) => c.name === "update_checklist" && c.status === "ok")?.args?.items;
   const activePaths = new Set(cards.filter((c) => c.status === "running" || c.status === "waiting").flatMap((c) => pathsOf(c.name, c.args)));
   const elapsed = isReplay
     ? (replayIdx > 0 ? replay.events[replayIdx - 1].t : 0) / 1000
@@ -851,13 +878,14 @@ export default function LiveRun(props: Props) {
           <button className="lr-close" onClick={isReplay ? exitReplay : () => setOpen(false)} title={isReplay ? "Exit replay" : "Hide live view"}>✕</button>
         </header>
         {isReplay && <div className="lr-progress">
-        {modelNote && <div className="lr-model-note">{modelNote}</div>}
-        <div style={{ width: `${progress}%` }} /></div>}
+          {modelNote && <div className="lr-model-note">{modelNote}</div>}
+          <div style={{ width: `${progress}%` }} /></div>}
 
         <div className="lr-body">
           {/* timeline */}
           <section className="lr-col lr-timeline">
             <div className="lr-col-title">Steps</div>
+            {Array.isArray(plan) && plan.length > 0 && <Checklist items={plan} pinned />}
             {cards.map((c, i) => (
               <div
                 key={c.id}
