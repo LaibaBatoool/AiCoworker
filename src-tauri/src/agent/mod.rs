@@ -4,6 +4,7 @@ pub mod orchestrator;
 pub mod mcp; 
 pub mod events;
 pub mod routing;
+pub mod claims;
 
 use serde::Serialize;
 use serde_json::Value;

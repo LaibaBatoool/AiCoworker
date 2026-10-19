@@ -131,13 +131,72 @@ async fn run_agent_loop_inner(
         };
 
         match turn {
-            ModelTurn::FinalAnswer(answer) => {
+                        ModelTurn::FinalAnswer(answer) => {
                 messages.push(ChatMessage {
                     role: "assistant".to_string(),
                     content: Some(answer.clone()),
                     tool_calls: None,
                     tool_call_id: None,
                 });
+                // Claim check (findings 3, 14, 21, 24): files the answer says were
+                // created must exist. One retry, then the user is told the truth.
+                if crate::agent::claims::enabled() {
+                    use crate::agent::claims;
+                    let already_checked = messages.iter().any(|m| {
+                        m.role == "user" && m.content.as_deref().map(|c| c.starts_with(claims::MARKER)).unwrap_or(false)
+                    });
+                    let missing = claims::missing_claimed_files(workspace_root, &answer);
+                    let card = format!("claim-check-{}", step + 1);
+                    if !missing.is_empty() {
+                        events::emit(AgentEvent::ToolStarted {
+                            call_id: card.clone(),
+                            name: "claim_check".to_string(),
+                            arguments: serde_json::json!({ "missing": missing }),
+                            tier: "safe".to_string(),
+                        });
+                        events::emit(AgentEvent::ToolFinished {
+                            call_id: card,
+                            name: "claim_check".to_string(),
+                            ok: false,
+                            preview: if already_checked {
+                                format!("Still missing after one retry: {}", missing.join(", "))
+                            } else {
+                                format!("Claimed but missing: {} — sent back to the agent", missing.join(", "))
+                            },
+                            duration_ms: 0,
+                        });
+                        if !already_checked {
+                            messages.push(ChatMessage {
+                                role: "user".to_string(),
+                                content: Some(claims::feedback(&missing)),
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
+                            continue; // give the agent one more chance
+                        }
+                        let answer = format!(
+                            "{}\n\n⚠ Backend check: these files named above do NOT exist in the workspace: {}.",
+                            answer,
+                            missing.join(", ")
+                        );
+                        return LoopOutcome::Done { messages, answer };
+                    }
+                    if already_checked {
+                        events::emit(AgentEvent::ToolStarted {
+                            call_id: card.clone(),
+                            name: "claim_check".to_string(),
+                            arguments: serde_json::json!({}),
+                            tier: "safe".to_string(),
+                        });
+                        events::emit(AgentEvent::ToolFinished {
+                            call_id: card,
+                            name: "claim_check".to_string(),
+                            ok: true,
+                            preview: "All files the agent claims now exist".to_string(),
+                            duration_ms: 0,
+                        });
+                    }
+                }
                 return LoopOutcome::Done { messages, answer };
             }
             ModelTurn::ToolCalls(tool_calls) => {
@@ -525,6 +584,8 @@ mod live_event_tests {
 
     #[tokio::test]
     async fn emits_a_live_timeline() {
+        // other tests also run the agent loop and would send events into the same sink
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seen: Arc<Mutex<Vec<AgentEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&seen);
         events::set_sink(Box::new(move |e| sink.lock().unwrap().push(e.clone())));
@@ -602,5 +663,88 @@ mod routing_loop_tests {
         let reply = messages.iter().find(|m| m.role == "tool").and_then(|m| m.content.clone()).unwrap();
         assert!(reply.contains("Loaded the 'office' tools"), "{}", reply);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+
+#[cfg(test)]
+mod claim_check_tests {
+    use super::*;
+    use crate::agent::model_client::{ToolCallFunction, ToolCallRequest};
+    use crate::tools::registry::ToolSchema;
+    use std::sync::Mutex;
+
+    /// Turn 1: falsely claims count.txt. Turn 2 (after the check): really writes it. Turn 3: answers.
+    struct Liar {
+        turn: Mutex<usize>,
+        saw_feedback: Mutex<bool>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelClient for Liar {
+        async fn next_turn(&self, m: &[ChatMessage], _t: &[ToolSchema]) -> Result<ModelTurn, String> {
+            let mut n = self.turn.lock().unwrap();
+            *n += 1;
+            if m.iter().any(|x| x.role == "user" && x.content.as_deref().unwrap_or("").starts_with(crate::agent::claims::MARKER)) {
+                *self.saw_feedback.lock().unwrap() = true;
+            }
+            match *n {
+                1 => Ok(ModelTurn::FinalAnswer("Done! I created count.txt with the total.".into())),
+                2 => Ok(ModelTurn::ToolCalls(vec![ToolCallRequest {
+                    id: "w1".into(),
+                    kind: "function".into(),
+                    function: ToolCallFunction { name: "write_file".into(), arguments: r#"{"relative_path":"count.txt","content":"12"}"#.into() },
+                }])),
+                _ => Ok(ModelTurn::FinalAnswer("Created count.txt (12 files).".into())),
+            }
+        }
+    }
+
+    /// Always claims a file it never writes.
+    struct StubbornLiar;
+
+    #[async_trait::async_trait]
+    impl ModelClient for StubbornLiar {
+        async fn next_turn(&self, _m: &[ChatMessage], _t: &[ToolSchema]) -> Result<ModelTurn, String> {
+            Ok(ModelTurn::FinalAnswer("I saved summary.md.".into()))
+        }
+    }
+
+    fn dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("aicw_claimloop_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+    fn goal() -> Vec<ChatMessage> {
+        vec![ChatMessage { role: "user".into(), content: Some("count the files into count.txt".into()), tool_calls: None, tool_call_id: None }]
+    }
+
+    #[tokio::test]
+    async fn false_claim_gets_a_second_chance() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::claims::set_enabled(true);
+        let d = dir("retry");
+        let client = Liar { turn: Mutex::new(0), saw_feedback: Mutex::new(false) };
+        let out = run_agent_loop(&client, d.to_str().unwrap(), goal(), false).await;
+        crate::agent::claims::set_enabled(false);
+        let LoopOutcome::Done { answer, .. } = out else { panic!("expected Done") };
+        assert!(*client.saw_feedback.lock().unwrap(), "the model was told the file is missing");
+        assert_eq!(std::fs::read_to_string(d.join("count.txt")).unwrap(), "12");
+        assert!(!answer.contains("Backend check"), "{}", answer);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn repeated_false_claim_is_flagged_to_the_user() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::claims::set_enabled(true);
+        let d = dir("flag");
+        let out = run_agent_loop(&StubbornLiar, d.to_str().unwrap(), goal(), false).await;
+        crate::agent::claims::set_enabled(false);
+        let LoopOutcome::Done { answer, messages } = out else { panic!("expected Done") };
+        assert!(answer.contains("Backend check") && answer.contains("summary.md"), "{}", answer);
+        assert_eq!(messages.iter().filter(|m| m.role == "user").count(), 2, "goal + exactly one check message");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

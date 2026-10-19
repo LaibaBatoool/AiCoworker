@@ -38,6 +38,8 @@ const since = arg("since", "");
 // tool routing on/off (env AICOWORKER_TOOL_ROUTING) is recorded per trial, and --since only
 // counts trials made in the SAME mode, so routing-on and routing-off results never mix
 const ROUTING = /^(on|1|true)$/i.test(process.env.AICOWORKER_TOOL_ROUTING || "");
+// claim check on/off (env AICOWORKER_CLAIM_CHECK), recorded and matched the same way
+const CLAIM = /^(on|1|true)$/i.test(process.env.AICOWORKER_CLAIM_CHECK || "");
 const BENCH_VERSION = (fs.readFileSync(BENCH, "utf8").match(/\((v[\d.]+)\)/) || [])[1] || "unknown";
 
 const sleep = (s) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, s * 1000);
@@ -145,13 +147,13 @@ let tasks = listTasks();
 if (only.length) tasks = tasks.filter((t) => only.includes(t.id));
 if (!tasks.length) { console.error("No matching tasks."); process.exit(1); }
 
-console.log(`\nRunning ${tasks.length} task(s) x ${trials} trial(s) | model ${model} | confirmations: ${confirm} | benchmark ${BENCH_VERSION}${ROUTING ? " | tool routing: ON" : ""}${since ? ` | resuming since ${since}` : ""}\n`);
+console.log(`\nRunning ${tasks.length} task(s) x ${trials} trial(s) | model ${model} | confirmations: ${confirm} | benchmark ${BENCH_VERSION}${ROUTING ? " | tool routing: ON" : ""}${CLAIM ? " | claim check: ON" : ""} ${since ? ` | resuming since ${since}` : ""}\n`);
 
 const session = [];
 const all = loadRuns();
 // trials already finished for this task (same model, since --since, real verdicts only)
 const doneBefore = (id) =>
-  since ? all.filter((r) => r.id === id && r.model === model && r.at >= since && r.verify_status !== "API_ERROR" && (r.routing ?? false) === ROUTING).length : 0;
+  since ? all.filter((r) => r.id === id && r.model === model && r.at >= since && r.verify_status !== "API_ERROR" && (r.routing ?? false) === ROUTING && (r.claim_check ?? false) === CLAIM).length : 0;
 let apiErrorStreak = 0;
 let aborted = false;
 
@@ -194,6 +196,7 @@ for (const t of tasks) {
       id: t.id, bucket: t.bucket, trial: n, at: new Date().toISOString(), model, confirm: t.confirm || confirm,
       bench_version: BENCH_VERSION,
       routing: ROUTING,
+      claim_check: CLAIM,
       agent_status: res.status, agent_reason: res.reason || "",
       seconds: Number((res.seconds || 0).toFixed(1)),
       model_turns: res.model_turns || 0, tool_calls: res.tool_calls || 0, tool_errors: res.tool_errors || 0,

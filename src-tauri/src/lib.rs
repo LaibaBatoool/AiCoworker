@@ -614,6 +614,8 @@ pub fn run() {
                 .setup(|app| {
             // desktop app: send only the tools a goal needs (benchmark keeps all tools)
             agent::routing::set_enabled(true);
+            // desktop app: check that files the agent claims to have created exist (benchmark: off)
+            agent::claims::set_enabled(true);
             // live agent events -> frontend ("agent-event"), for the Live Run view
             let handle = app.handle().clone();
             agent::events::set_sink(Box::new(move |e| {
