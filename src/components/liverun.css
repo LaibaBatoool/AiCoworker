@@ -284,7 +284,7 @@
 
 /* ---- task checklist (update_checklist) ---- */
 .lr-checklist { background: var(--lr-panel-2); border: 1px solid var(--lr-line); border-radius: 10px; padding: 10px 12px; }
-.lr-checklist-pinned { position: sticky; top: 0; z-index: 2; margin: 8px 10px 0; box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35); max-height: 38%; overflow-y: auto; }
+.lr-checklist-pinned { position: sticky; top: 0; z-index: 2; flex-shrink: 0; margin: 8px 10px 0; box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35); max-height: 40vh; overflow-y: auto; }
 .lr-checklist-head { display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; color: var(--lr-text); }
 .lr-checklist-all { color: var(--lr-green); }
 .lr-checklist-bar { height: 4px; border-radius: 4px; background: var(--lr-line); margin: 7px 0 8px; overflow: hidden; }
