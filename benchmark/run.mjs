@@ -220,7 +220,7 @@ for (const t of tasks) {
     all.push(rec);
     fs.writeFileSync(RUNS, JSON.stringify(all, null, 2)); // saved after every trial
 
-    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${rec.total_tokens} tok | ${verifyStatus}${rec.plan_asked ? " | 🗒️ plan asked" : ""}${rec.plan_checks ? ` | 🗒️ no-plan check fired${rec.plan_flagged ? " (user warned)" : ""}` : ""}${rec.plan_asked ? " | 🗒️ plan asked" : ""}${rec.plan_checks ? ` | 🗒️ no-plan check fired${rec.plan_flagged ? " (user warned)" : ""}` : ""}${rec.checklist_used ? " | 📋 plan" : ""}${rec.checklist_checks ? ` | ☑️ checklist gate fired${rec.checklist_flagged ? " (user warned)" : " (agent finished)"}` : ""}${rec.claim_checks ? ` | 🔍 claim check fired${rec.claim_flagged ? " (user warned)" : " (agent fixed it)"}` : ""}${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
+    console.log(`${label} agent:${rec.agent_status} | ${rec.seconds}s | ${rec.tool_calls} calls | ${rec.tool_errors} tool errors | ${rec.confirmations} confirms | ${rec.total_tokens} tok | ${verifyStatus}${rec.plan_asked ? " | 🗒️ plan asked" : ""}${rec.plan_checks ? ` | 🗒️ no-plan check fired${rec.plan_flagged ? " (user warned)" : ""}` : ""}${rec.checklist_used ? " | 📋 plan" : ""}${rec.checklist_checks ? ` | ☑️ checklist gate fired${rec.checklist_flagged ? " (user warned)" : " (agent finished)"}` : ""}${rec.claim_checks ? ` | 🔍 claim check fired${rec.claim_flagged ? " (user warned)" : " (agent fixed it)"}` : ""}${verifyStatus === "PASS" ? "" : " — " + verifyReason}`);
 
     if (isDailyLimit(res)) {
       const hint = retryHint(res);
