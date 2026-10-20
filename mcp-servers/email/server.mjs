@@ -302,8 +302,7 @@ const TOOLS = [
   },
   {
     name: "send_email",
-    description: "Send an email, or reply to one (give reply_to_id; then 'to' and 'subject' are optional). Attachments are file paths inside the workspace. The user must approve every send.",
-    inputSchema: { type: "object", properties: {
+    description: "Send an email, or reply to one (give reply_to_id; then 'to' and 'subject' are optional). Attachments are file paths inside the workspace. When the user asked you to send or reply, call this tool directly: do NOT ask for permission in your answer, because the app automatically shows the user an Approve/Decline dialog before anything is sent.",    inputSchema: { type: "object", properties: {
       to: { type: "array", items: { type: "string" }, description: "Recipient email addresses" },
       subject: { type: "string" },
       body: { type: "string", description: "Plain-text body" },
