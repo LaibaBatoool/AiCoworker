@@ -585,6 +585,19 @@ fn backup_models(main: &str) -> Vec<String> {
     list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != main).collect()
 }
 
+/// The Groq key: the one typed in the app if any, otherwise GROQ_API_KEY from
+/// src-tauri/.env (loaded at startup). The .env key never goes to the frontend.
+fn pick_api_key(typed: &str, from_env: Option<String>) -> Result<String, String> {
+    let typed = typed.trim();
+    if !typed.is_empty() {
+        return Ok(typed.to_string());
+    }
+    match from_env.map(|k| k.trim().to_string()) {
+        Some(k) if !k.is_empty() => Ok(k),
+        _ => Err("No Groq API key: add GROQ_API_KEY=... to src-tauri/.env and restart the app, or paste a key into the box.".to_string()),
+    }
+}
+
 // ---- Agent orchestration entry point ----
 #[tauri::command]
 async fn run_agent_tool(
@@ -596,7 +609,7 @@ async fn run_agent_tool(
 ) -> Result<agent::AgentStepResult, String> {
     let messages: Vec<agent::model_client::ChatMessage> = serde_json::from_str(&messages_json)
         .map_err(|e| format!("messages_json was not valid: {}", e))?;
-
+    let api_key = pick_api_key(&api_key, std::env::var("GROQ_API_KEY").ok())?;
     // Main model + backups that have their own daily quota (Groq limits are per model).
     let client = agent::model_client::OpenAiCompatibleClient::groq(api_key, model.clone())
         .with_fallbacks(backup_models(&model));
@@ -616,7 +629,9 @@ async fn run_agent_tool(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    dotenvy::dotenv().ok(); // loads src-tauri/.env if present; harmless if it's missing
+    dotenvy::dotenv().ok(); // loads .env from the current folder if present; harmless if it's missing
+    // dev builds: also src-tauri/.env by its real path, whatever folder the app was started from
+    let _ = dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/.env"));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -707,5 +722,21 @@ mod undo_tests {
         restore_snapshot_tool(root.clone(), redo.commit_hash, true).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v2", "the run's final write is recoverable");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+
+#[cfg(test)]
+mod api_key_tests {
+    use super::pick_api_key;
+
+    #[test]
+    fn typed_key_wins_then_env_then_clear_error() {
+        assert_eq!(pick_api_key("  gsk_typed ", Some("gsk_env".into())).unwrap(), "gsk_typed");
+        assert_eq!(pick_api_key("", Some("gsk_env\n".into())).unwrap(), "gsk_env", "blank box -> .env key");
+        assert_eq!(pick_api_key("   ", Some("gsk_env".into())).unwrap(), "gsk_env");
+        let e = pick_api_key("", None).unwrap_err();
+        assert!(e.contains("GROQ_API_KEY") && e.contains(".env"), "{}", e);
+        assert!(pick_api_key("", Some("  ".into())).is_err(), "empty value in .env is not a key");
     }
 }
