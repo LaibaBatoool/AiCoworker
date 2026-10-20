@@ -218,7 +218,8 @@ async function realSummaries(client, uids) {
   return res.sort((a, b) => b.date.localeCompare(a.date));
 }
 const uidOf = (id) => {
-  const m = /^uid:(\d+)$/.exec(String(id || ""));
+  // models often drop the "uid:" prefix ("36" instead of "uid:36"): accept both (seen live, 2026-10-21)
+  const m = /^\s*(?:uid:)?\s*(\d+)\s*$/i.exec(String(id ?? ""));
   if (!m) throw new Error(`Bad email id ${id}. Use list_inbox or search_email to get ids.`);
   return Number(m[1]);
 };
