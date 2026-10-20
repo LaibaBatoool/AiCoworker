@@ -93,6 +93,8 @@ fn user_text(messages: &[ChatMessage]) -> String {
         .iter()
         .filter(|m| m.role == "user")
         .filter_map(|m| m.content.clone())
+        // the backend's own check messages ("...finish them with your tools") are not the user's words
+        .filter(|c| !c.starts_with("[Automatic"))
         .collect::<Vec<_>>()
         .join("\n")
         .to_lowercase()
@@ -262,6 +264,13 @@ mod tests {
         assert_eq!(on.into_iter().collect::<Vec<_>>(), vec!["core"]);
         assert!(active_groups(&all(), &[user("Write a Word document about rain")]).contains("office"));
         assert!(active_groups(&all(), &[user("merge a.pdf and b.pdf")]).contains("office"));
+    }
+
+    #[test]
+    fn backend_messages_dont_load_groups() {
+        // the checklist / claim-check messages say "tool" and "file"; only the user's words count
+        let msgs = vec![user("Rename every .jpeg file in photos"), user(&crate::agent::checklist::plan_request())];
+        assert_eq!(active_groups(&all(), &msgs).into_iter().collect::<Vec<_>>(), vec!["core"]);
     }
 
     #[test]

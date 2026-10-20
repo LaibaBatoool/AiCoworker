@@ -67,26 +67,76 @@ async fn drive(client: &OpenAiCompatibleClient, workspace: &str, prompt: &str, a
         // mirrors the UI: approval applies to one resume call only
         let this_resume = std::mem::replace(&mut resume, false);
         match run_agent_loop(client, workspace, messages, this_resume).await {
-            LoopOutcome::Done { messages: m, answer } => {
-                return Run { status: "done".into(), reason: String::new(), answer, messages: m, confirmations, confirmed_tools, pending: None };
+            LoopOutcome::Done {
+                messages: m,
+                answer,
+            } => {
+                return Run {
+                    status: "done".into(),
+                    reason: String::new(),
+                    answer,
+                    messages: m,
+                    confirmations,
+                    confirmed_tools,
+                    pending: None,
+                };
             }
-            LoopOutcome::AwaitingConfirmation { messages: m, tool_name, arguments } => {
+            LoopOutcome::AwaitingConfirmation {
+                messages: m,
+                tool_name,
+                arguments,
+            } => {
                 confirmed_tools.push(tool_name.clone());
                 if !allow {
-                    return Run { status: "denied".into(), reason: "confirmation denied by harness".into(), answer: String::new(), messages: m, confirmations, confirmed_tools, pending: Some((tool_name, arguments)) };
+                    return Run {
+                        status: "denied".into(),
+                        reason: "confirmation denied by harness".into(),
+                        answer: String::new(),
+                        messages: m,
+                        confirmations,
+                        confirmed_tools,
+                        pending: Some((tool_name, arguments)),
+                    };
                 }
                 if confirmations >= 25 {
-                    return Run { status: "stopped_safety".into(), reason: "too many confirmation requests".into(), answer: String::new(), messages: m, confirmations, confirmed_tools, pending: None };
+                    return Run {
+                        status: "stopped_safety".into(),
+                        reason: "too many confirmation requests".into(),
+                        answer: String::new(),
+                        messages: m,
+                        confirmations,
+                        confirmed_tools,
+                        pending: None,
+                    };
                 }
                 confirmations += 1;
                 messages = m;
                 resume = true;
             }
-            LoopOutcome::StoppedForSafety { messages: m, reason } => {
-                return Run { status: "stopped_safety".into(), reason, answer: String::new(), messages: m, confirmations, confirmed_tools, pending: None };
+            LoopOutcome::StoppedForSafety {
+                messages: m,
+                reason,
+            } => {
+                return Run {
+                    status: "stopped_safety".into(),
+                    reason,
+                    answer: String::new(),
+                    messages: m,
+                    confirmations,
+                    confirmed_tools,
+                    pending: None,
+                };
             }
             LoopOutcome::Error(e) => {
-                return Run { status: "error".into(), reason: e, answer: String::new(), messages: Vec::new(), confirmations, confirmed_tools, pending: None };
+                return Run {
+                    status: "error".into(),
+                    reason: e,
+                    answer: String::new(),
+                    messages: Vec::new(),
+                    confirmations,
+                    confirmed_tools,
+                    pending: None,
+                };
             }
         }
     }
@@ -133,7 +183,9 @@ fn tool_call_list(messages: &[ChatMessage]) -> Vec<Value> {
 /// Writes <workspace>/../agent_trace.json. Best-effort: a failure here
 /// must never change the benchmark result itself.
 fn write_trace(workspace: &str, run: &Run) {
-    let Some(parent) = std::path::Path::new(workspace).parent() else { return };
+    let Some(parent) = std::path::Path::new(workspace).parent() else {
+        return;
+    };
     let (pending_tool, pending_arguments) = match &run.pending {
         Some((n, a)) => (json!(n), a.clone()),
         None => (Value::Null, Value::Null),
@@ -175,7 +227,10 @@ async fn main() {
         let api_key = match std::env::var("GROQ_API_KEY") {
             Ok(k) if !k.trim().is_empty() => k,
             _ => {
-                println!("BENCH_RESULT:{}", json!({ "status": "error", "reason": "GROQ_API_KEY not found in src-tauri/.env", "seconds": 0.0 }));
+                println!(
+                    "BENCH_RESULT:{}",
+                    json!({ "status": "error", "reason": "GROQ_API_KEY not found in src-tauri/.env", "seconds": 0.0 })
+                );
                 return;
             }
         };
@@ -214,9 +269,15 @@ async fn main() {
                 "checklist_used": run.messages.iter().any(|m| m.tool_calls.as_ref().map(|t| t.iter().any(|c| c.function.name == aicoworker_lib::agent::checklist::TOOL)).unwrap_or(false)),
                 "checklist_checks": run.messages.iter().filter(|m| m.role == "user" && m.content.as_deref().map(|c| c.starts_with(aicoworker_lib::agent::checklist::MARKER)).unwrap_or(false)).count(),
                 "checklist_flagged": run.answer.contains("⚠ Backend check: checklist"),
+                // required plan (finding 32): asked for a plan at the start / sent back for having none / user warned
+                "plan_asked": run.messages.iter().any(|m| m.role == "user" && m.content.as_deref().map(|c| c.starts_with(aicoworker_lib::agent::checklist::PLAN_ASK)).unwrap_or(false)),
+                "plan_checks": run.messages.iter().filter(|m| m.role == "user" && m.content.as_deref().map(|c| c.starts_with(aicoworker_lib::agent::checklist::PLAN_CHECK)).unwrap_or(false)).count(),
+                "plan_flagged": run.answer.contains("⚠ Backend check: this task had several items"),
             })
         }
-        Err(_) => json!({ "status": "timeout", "reason": format!("exceeded {}s", timeout_secs), "seconds": seconds }),
+        Err(_) => {
+            json!({ "status": "timeout", "reason": format!("exceeded {}s", timeout_secs), "seconds": seconds })
+        }
     };
     v["prompt_tokens"] = json!(usage.prompt_tokens);
     v["completion_tokens"] = json!(usage.completion_tokens);

@@ -119,6 +119,33 @@ async fn run_agent_loop_inner(
         }
     }
 
+        // Required plan (finding 32): a goal that names many items gets one
+    // "make a checklist first" message before the model's first turn.
+    if !resume_confirmed && crate::agent::checklist::enabled() && crate::agent::checklist::should_ask_for_plan(&messages) {
+        use crate::agent::checklist;
+        let goal_idx = messages
+            .iter()
+            .position(|m| m.role == "user" && m.content.as_deref() == Some(checklist::goal(&messages)))
+            .unwrap_or(messages.len().saturating_sub(1));
+        messages.insert(
+            goal_idx + 1,
+            ChatMessage { role: "user".to_string(), content: Some(checklist::plan_request()), tool_calls: None, tool_call_id: None },
+        );
+        events::emit(AgentEvent::ToolStarted {
+            call_id: "plan-check-start".to_string(),
+            name: "plan_check".to_string(),
+            arguments: serde_json::json!({ "when": "start" }),
+            tier: "safe".to_string(),
+        });
+        events::emit(AgentEvent::ToolFinished {
+            call_id: "plan-check-start".to_string(),
+            name: "plan_check".to_string(),
+            ok: true,
+            preview: "The goal names several items — asked the agent to list them first".to_string(),
+            duration_ms: 0,
+        });
+    }
+
     for step in 0..MAX_STEPS {
         events::emit(AgentEvent::Thinking { step: step + 1 });
         let trimmed_for_model = trim_history_for_request(&messages);
@@ -141,6 +168,44 @@ async fn run_agent_loop_inner(
                     tool_calls: None,
                     tool_call_id: None,
                 });
+
+                                // Plan gate (finding 32): a multi-item task answered with NO checklist is
+                // sent back once to list its items; still none -> the user is told.
+                if crate::agent::checklist::enabled() {
+                    use crate::agent::checklist;
+                    if let Some(files) = checklist::needs_plan_check(&messages) {
+                        let card = format!("plan-check-{}", step + 1);
+                        events::emit(AgentEvent::ToolStarted {
+                            call_id: card.clone(),
+                            name: "plan_check".to_string(),
+                            arguments: serde_json::json!({ "when": "end", "files": files }),
+                            tier: "safe".to_string(),
+                        });
+                        events::emit(AgentEvent::ToolFinished {
+                            call_id: card,
+                            name: "plan_check".to_string(),
+                            ok: false,
+                            preview: format!("Answered without a plan ({} files touched) — sent back to list and check the items", files),
+                            duration_ms: 0,
+                        });
+                        messages.push(ChatMessage {
+                            role: "user".to_string(),
+                            content: Some(checklist::plan_check_feedback(files)),
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+                        continue;
+                    }
+                }
+                let answer = if crate::agent::checklist::enabled()
+                    && crate::agent::checklist::has_backend_message(&messages, crate::agent::checklist::PLAN_CHECK)
+                    && crate::agent::checklist::current(&messages).is_none()
+                {
+                    format!("{}\n\n⚠ Backend check: this task had several items but the agent made no checklist, so not every item was confirmed.", answer)
+                } else {
+                    answer
+                };
+
                 // Checklist gate (finding 29): items the agent listed must be ticked.
                 // One retry, then the user is told which items are still open.
                 if crate::agent::checklist::enabled() {
@@ -901,6 +966,135 @@ mod checklist_tests {
         let LoopOutcome::Done { answer, .. } = out else { panic!("expected Done") };
         assert!(!*client.offered_tool.lock().unwrap(), "benchmark default: tool not offered");
         assert_eq!(answer, "All done.", "no gate when off");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    
+    // ---------- required plan (finding 32) ----------
+    use crate::agent::checklist::{PLAN_ASK, PLAN_CHECK};
+
+    fn goal_text(t: &str) -> Vec<ChatMessage> {
+        vec![
+            ChatMessage { role: "system".into(), content: Some("sys".into()), tool_calls: None, tool_call_id: None },
+            ChatMessage { role: "user".into(), content: Some(t.into()), tool_calls: None, tool_call_id: None },
+        ]
+    }
+    fn backend_msgs(m: &[ChatMessage], marker: &str) -> usize {
+        m.iter().filter(|x| x.role == "user" && x.content.as_deref().unwrap_or("").starts_with(marker)).count()
+    }
+    const PLAN3: &str = r#"{"items":[{"text":"a.txt","done":true},{"text":"b.txt","done":true},{"text":"c.txt","done":true}]}"#;
+    fn w(id: &str, f: &str) -> ModelTurn {
+        tc(id, "write_file", &format!(r#"{{"relative_path":"{}","content":"x"}}"#, f))
+    }
+
+    /// Follows the plan request: plans, works, ticks, answers.
+    struct Planner {
+        turn: Mutex<usize>,
+        first_saw_ask: Mutex<bool>,
+    }
+    #[async_trait::async_trait]
+    impl ModelClient for Planner {
+        async fn next_turn(&self, m: &[ChatMessage], _t: &[ToolSchema]) -> Result<ModelTurn, String> {
+            let mut n = self.turn.lock().unwrap();
+            *n += 1;
+            if *n == 1 {
+                *self.first_saw_ask.lock().unwrap() = backend_msgs(m, PLAN_ASK) == 1;
+            }
+            Ok(match *n {
+                1 => tc("p", "update_checklist", PLAN),
+                2 => w("w1", "a.txt"),
+                3 => w("w2", "b.txt"),
+                4 => tc("t", "update_checklist", ALL),
+                _ => ModelTurn::FinalAnswer("Both done.".into()),
+            })
+        }
+    }
+
+    /// Simple-sounding goal, writes 3 files with no plan; plans after the check.
+    struct NoPlanner {
+        turn: Mutex<usize>,
+    }
+    #[async_trait::async_trait]
+    impl ModelClient for NoPlanner {
+        async fn next_turn(&self, _m: &[ChatMessage], _t: &[ToolSchema]) -> Result<ModelTurn, String> {
+            let mut n = self.turn.lock().unwrap();
+            *n += 1;
+            Ok(match *n {
+                1 => w("w1", "a.txt"),
+                2 => w("w2", "b.txt"),
+                3 => w("w3", "c.txt"),
+                4 => ModelTurn::FinalAnswer("Done.".into()),
+                5 => tc("p", "update_checklist", PLAN3),
+                _ => ModelTurn::FinalAnswer("Done, all three checked.".into()),
+            })
+        }
+    }
+
+    /// Never makes a plan, whatever it is told.
+    struct Ignorer {
+        turn: Mutex<usize>,
+    }
+    #[async_trait::async_trait]
+    impl ModelClient for Ignorer {
+        async fn next_turn(&self, _m: &[ChatMessage], _t: &[ToolSchema]) -> Result<ModelTurn, String> {
+            let mut n = self.turn.lock().unwrap();
+            *n += 1;
+            Ok(if *n == 1 { w("w1", "a.txt") } else { ModelTurn::FinalAnswer("Done.".into()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_item_goal_is_asked_for_a_plan_first() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::checklist::set_enabled(true);
+        let d = dir("ask");
+        let client = Planner { turn: Mutex::new(0), first_saw_ask: Mutex::new(false) };
+        let out = run_agent_loop(&client, d.to_str().unwrap(), goal_text("Write each of a.txt and b.txt"), false).await;
+        crate::agent::checklist::set_enabled(false);
+        let LoopOutcome::Done { answer, messages } = out else { panic!("expected Done") };
+        assert!(*client.first_saw_ask.lock().unwrap(), "the plan request is there before the model's first turn");
+        assert_eq!(messages[2].content.as_deref().map(|c| c.starts_with(PLAN_ASK)), Some(true), "right after the goal");
+        assert_eq!(backend_msgs(&messages, PLAN_CHECK), 0, "a plan was made, no end check");
+        assert_eq!(answer, "Both done.");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn no_plan_after_three_files_is_sent_back_once() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::checklist::set_enabled(true);
+        let d = dir("noplan");
+        let out = run_agent_loop(&NoPlanner { turn: Mutex::new(0) }, d.to_str().unwrap(), goal_text("tidy up: write a.txt, b.txt, c.txt"), false).await;
+        crate::agent::checklist::set_enabled(false);
+        let LoopOutcome::Done { answer, messages } = out else { panic!("expected Done") };
+        assert_eq!(backend_msgs(&messages, PLAN_ASK), 0, "goal has no 'every/each/all'");
+        assert_eq!(backend_msgs(&messages, PLAN_CHECK), 1, "caught by the 3-file rule");
+        assert_eq!(answer, "Done, all three checked.");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn still_no_plan_is_shown_to_the_user() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::checklist::set_enabled(true);
+        let d = dir("ignore");
+        let out = run_agent_loop(&Ignorer { turn: Mutex::new(0) }, d.to_str().unwrap(), goal_text("Rename every .jpeg file"), false).await;
+        crate::agent::checklist::set_enabled(false);
+        let LoopOutcome::Done { answer, messages } = out else { panic!("expected Done") };
+        assert!(answer.contains("made no checklist"), "{}", answer);
+        assert_eq!(messages.iter().filter(|m| m.role == "user").count(), 3, "goal + one plan request + one plan check");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn plan_rules_off_when_checklist_off() {
+        let _g = crate::agent::routing::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::agent::checklist::set_enabled(false);
+        let d = dir("planoff");
+        let out = run_agent_loop(&Ignorer { turn: Mutex::new(0) }, d.to_str().unwrap(), goal_text("Rename every .jpeg file"), false).await;
+        let LoopOutcome::Done { answer, messages } = out else { panic!("expected Done") };
+        assert_eq!(answer, "Done.");
+        assert_eq!(messages.iter().filter(|m| m.role == "user").count(), 1, "benchmark default: no extra messages");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

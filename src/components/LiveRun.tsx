@@ -126,6 +126,7 @@ function describe(name: string, a: any): string {
       const d = it.filter((x: any) => x?.done).length;
       return d === 0 ? `Planning: ${it.length} item${it.length === 1 ? "" : "s"}` : `Checklist: ${d}/${it.length} done`;
     }
+    case "plan_check": return a?.when === "start" ? "Asking for a plan first" : `No plan made — asking for one (${a?.files ?? 0} files touched)`;
     case "checklist_check": return Array.isArray(a?.open) && a.open.length ? `Checking the list: ${a.open.length} still open` : "Checking the checklist";
     case "claim_check": return Array.isArray(a?.missing) && a.missing.length ? `Checking claims: ${a.missing.join(", ")} missing` : "Checking the agent's claims";
 
@@ -144,7 +145,7 @@ function icon(name: string): string {
     write_file: "✍️", edit_file: "🩹", read_file: "📖", create_docx: "📝", create_xlsx: "📊",
     read_spreadsheet: "📊", list_directory: "📂", search_files: "🔎", get_file_metadata: "ℹ️",
     create_directory: "📁", delete_file: "🗑️", move_rename: "↪️", execute_command: "⌨️",
-    fetch_url: "🌐", request_tools: "🧰", claim_check: "🔍", update_checklist: "📋", checklist_check: "☑️", convert_to_pdf: "📄", git_commit: "🌿", git_diff: "🌿", git_status: "🌿", git_log: "🌿",
+    fetch_url: "🌐", request_tools: "🧰", claim_check: "🔍", update_checklist: "📋", checklist_check: "☑️", plan_check: "🗒️", convert_to_pdf: "📄", git_commit: "🌿", git_diff: "🌿", git_status: "🌿", git_log: "🌿",
   };
   return m[name] ?? "🛠️";
 }
@@ -504,7 +505,7 @@ const esc = (v: unknown) =>
 
 function buildReport(d: ReportData): string {
   const plan: { text: string; done: boolean }[] = Array.isArray(d.plan) ? d.plan.filter((x: any) => x && typeof x.text === "string") : [];
-  const checks = d.cards.filter((c) => c.name === "claim_check" || c.name === "checklist_check");
+  const checks = d.cards.filter((c) => c.name === "claim_check" || c.name === "checklist_check" || c.name === "plan_check");
   const tiers = { safe: 0, mutating: 0, privileged: 0 } as Record<string, number>;
   d.cards.forEach((c) => { if (c.tier in tiers) tiers[c.tier]++; });
   const approvals = Object.values(d.decisions);
