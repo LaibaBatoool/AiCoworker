@@ -1,0 +1,13 @@
+{
+  "name": "aicoworker-email-mcp",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Email MCP server for AI CoWorker (mock mailbox or real IMAP/SMTP)",
+  "main": "server.mjs",
+  "dependencies": {
+    "imapflow": "^1.0.0",
+    "mailparser": "^3.7.0",
+    "nodemailer": "^6.9.0"
+  }
+}

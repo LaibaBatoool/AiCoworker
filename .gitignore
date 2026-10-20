@@ -23,3 +23,6 @@ benchmark/runs.json
 handoff/
 AiCoworker-handoff.zip
 
+benchmark/.mcp-email.json
+mcp-servers/email/node_modules/
+
