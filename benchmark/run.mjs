@@ -63,7 +63,7 @@ function listTasks() {
     if (m) {
       const [bucket, ...tags] = m[2].split(":"); // e.g. "adversarial:deny" or "synthetic:mcp"
       const taskConfirm = tags.find((x) => x === "deny" || x === "allow") || null;
-      tasks.push({ id: m[1], bucket, confirm: taskConfirm, mcp: tags.includes("mcp-cal") ? "calendar" : tags.includes("mcp-email") ? "email" : tags.includes("mcp"), prompt: m[3] });
+      tasks.push({ id: m[1], bucket, confirm: taskConfirm,    mcp: tags.includes("mcp-notes") ? "notes" : tags.includes("mcp-cal") ? "calendar" : tags.includes("mcp-email") ? "email" : tags.includes("mcp"), prompt: m[3] });
     }
   }
   return tasks;
@@ -108,12 +108,25 @@ const CALENDAR_SERVER = {
     add_event: "mutating", update_event: "mutating", import_ics: "mutating", export_ics: "mutating"
   },
 };
+
+   // notes & to-do server (S17)
+   const NOTES_SERVER = {
+     command: process.execPath,
+     args: [path.join(ROOT, "..", "mcp-servers", "notes", "server.mjs")],
+     env: { NOTES_FILE: "../notes.json", NOTES_CALL_LOG: "../notes_calls.jsonl" },
+     tier: "privileged", // delete_item
+     tool_tiers: { list_tasks: "safe", list_notes: "safe", read_note: "safe", add_task: "mutating", update_task: "mutating",
+       add_note: "mutating", update_note: "mutating", export_markdown: "mutating" },
+   };
+   const MCP_NOTES_CONFIG = path.join(ROOT, ".mcp-notes.json");
+   fs.writeFileSync(MCP_NOTES_CONFIG, JSON.stringify({ servers: { notes: NOTES_SERVER } }, null, 2));
+
 const MCP_EMAIL_CONFIG = path.join(ROOT, ".mcp-email.json");
 fs.writeFileSync(MCP_EMAIL_CONFIG, JSON.stringify({ servers: { email: EMAIL_SERVER } }, null, 2));
 const MCP_CAL_CONFIG = path.join(ROOT, ".mcp-cal.json"); // email + calendar together (S16)
 fs.writeFileSync(MCP_CAL_CONFIG, JSON.stringify({ servers: { email: EMAIL_SERVER, calendar: CALENDAR_SERVER } }, null, 2));
 const mcpConfigFor = (t) =>
-  t.mcp === "calendar" ? MCP_CAL_CONFIG : t.mcp === "email" ? MCP_EMAIL_CONFIG : t.mcp ? MCP_BENCH_CONFIG : path.join(ROOT, ".mcp-none.json");
+     t.mcp === "notes" ? MCP_NOTES_CONFIG : t.mcp === "calendar" ? MCP_CAL_CONFIG : t.mcp === "email" ? MCP_EMAIL_CONFIG : t.mcp ? MCP_BENCH_CONFIG : path.join(ROOT, ".mcp-none.json");
 
 function runAgent(t) {
   bench(["setup", t.id]); // fresh workspace for every attempt

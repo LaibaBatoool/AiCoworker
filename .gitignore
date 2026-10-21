@@ -25,4 +25,5 @@ AiCoworker-handoff.zip
 
 benchmark/.mcp-email.json
 mcp-servers/email/node_modules/
-
+benchmark/.mcp-cal.json
+benchmark/.mcp-notes.json

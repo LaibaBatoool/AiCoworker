@@ -1,0 +1,62 @@
+/* Notes & to-do visuals in the Live view (NotesStage.tsx). Uses the Live view's --lr-* colours. */
+.nt-panel { align-self: stretch; background: var(--lr-panel, #15122a); border: 1px solid var(--lr-line, #2c2650); border-radius: 12px; overflow: hidden;
+  animation: nt-in 0.3s ease-out; }
+.nt-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 14px; font-weight: 600; font-size: 13.5px;
+  border-bottom: 1px solid var(--lr-line, #2c2650); background: rgba(34, 197, 94, 0.06); }
+.nt-muted { color: var(--lr-muted, #8f89b3); font-weight: 400; font-size: 12px; }
+.nt-ok { color: #86efac; font-size: 12.5px; }
+.nt-empty { padding: 18px 14px; color: var(--lr-muted, #8f89b3); }
+.nt-in { animation: nt-in 0.3s ease-out both; }
+
+/* tasks */
+.nt-task { display: flex; gap: 12px; align-items: flex-start; padding: 9px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+.nt-panel .nt-in:last-child .nt-task { border-bottom: 0; }
+.nt-box { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; border: 2px solid #6b6496; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: #0d0b1a; }
+.nt-box-on { background: #22c55e; border-color: #22c55e; }
+.nt-fresh .nt-box-on { animation: nt-tick 0.5s ease-out; }
+.nt-task-main { flex: 1; min-width: 0; }
+.nt-task-title { font-size: 13.5px; color: #fff; font-weight: 550; }
+.nt-done .nt-task-title { text-decoration: line-through; color: var(--lr-muted, #8f89b3); font-weight: 400; }
+.nt-flag { display: inline-block; width: 16px; height: 16px; line-height: 16px; text-align: center; margin-right: 6px; border-radius: 4px;
+  background: #ef4444; color: #fff; font-size: 11px; font-weight: 800; }
+.nt-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 3px; font-size: 12px; }
+.nt-due { color: #c4b5fd; }
+.nt-soon { color: #fcd34d; }
+.nt-overdue { color: #fca5a5; font-weight: 600; }
+.nt-tag { color: #93c5fd; }
+.nt-low { align-self: center; }
+.nt-id { flex: none; align-self: center; font: 11px ui-monospace, Consolas, monospace; color: var(--lr-muted, #8f89b3); opacity: 0.7; margin-left: auto; }
+.nt-before { margin: 0 16px 12px; font-size: 12px; color: var(--lr-muted, #8f89b3); text-decoration: line-through; }
+
+/* notes */
+.nt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; padding: 12px; }
+.nt-note-tile { background: #fef9c3; color: #3f3a1e; border-radius: 8px; padding: 10px 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  animation: nt-in 0.35s ease-out both; }
+.nt-note-tile:nth-child(3n + 2) { background: #dbeafe; color: #1e3a5f; }
+.nt-note-tile:nth-child(3n + 3) { background: #dcfce7; color: #1f3d2a; }
+.nt-note-title { font-weight: 700; font-size: 13.5px; }
+.nt-note-preview { font-size: 12.5px; margin: 4px 0 6px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.nt-note-tile .nt-tag { color: #1d4ed8; } .nt-note-tile .nt-muted, .nt-note-tile .nt-id { color: rgba(0, 0, 0, 0.5); }
+.nt-paper { margin: 14px 16px 16px; padding: 14px 16px; border-radius: 10px; background: #fefce8; color: #292524; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  animation: nt-in 0.35s ease-out; }
+.nt-paper .md strong, .nt-paper .md .md-h { color: #1c1917; }
+.nt-paper .md code { background: rgba(0, 0, 0, 0.06); border-color: rgba(0, 0, 0, 0.1); }
+.nt-paper .md li::marker { color: #a16207; }
+.nt-paper .nt-muted { color: #78716c; } .nt-paper .nt-tag { color: #1d4ed8; }
+.nt-paper-title { font-size: 17px; font-weight: 700; color: #1c1917; }
+.nt-paper .nt-meta { margin-bottom: 10px; }
+.nt-append-label { margin-top: 4px; }
+.nt-appended { border-left: 3px solid #22c55e; padding-left: 10px; background: rgba(34, 197, 94, 0.08); border-radius: 4px; }
+
+/* banners / simple */
+.nt-banner { margin: 10px 16px 4px; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--lr-line, #2c2650); }
+.nt-wait { background: rgba(245, 158, 11, 0.12); border-color: rgba(245, 158, 11, 0.45); color: #fcd34d; }
+.nt-declined { background: rgba(148, 163, 184, 0.1); color: #cbd5e1; }
+.nt-error { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.45); color: #fca5a5; white-space: pre-wrap; }
+.nt-panel > .nt-banner:last-child { margin-bottom: 14px; }
+.nt-simple { align-self: center; display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 36px; text-align: center; max-width: 520px; }
+.nt-simple-icon { font-size: 40px; animation: nt-in 0.4s ease-out; }
+
+@keyframes nt-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes nt-tick { 0% { transform: scale(0.3); } 60% { transform: scale(1.3); } 100% { transform: scale(1); } }

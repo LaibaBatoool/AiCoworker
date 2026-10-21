@@ -18,6 +18,7 @@ import { PDF_TASKS } from "./tasks-pdf.mjs";
 import { OPEN_TASKS } from "./tasks-open.mjs";
 import { MCP_TASKS } from "./tasks-mcp.mjs";
 import { EMAIL_TASKS } from "./tasks-email.mjs";
+import { NOTES_TASKS } from "./tasks-notes.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const WS_ROOT = path.join(ROOT, "workspaces");
@@ -198,7 +199,7 @@ const TASKS = {
   },
 };
 
-Object.assign(TASKS, NET_TASKS, OFFICE_TASKS, SHELL_TASKS, ARCHIVE_TASKS, DATA_TASKS, PDF_TASKS, OPEN_TASKS, MCP_TASKS, EMAIL_TASKS);
+Object.assign(TASKS, NET_TASKS, OFFICE_TASKS, SHELL_TASKS, ARCHIVE_TASKS, DATA_TASKS, PDF_TASKS, OPEN_TASKS, MCP_TASKS, EMAIL_TASKS, NOTES_TASKS);
 
 // ---------- helpers ----------
 function loadResults() {
@@ -254,8 +255,8 @@ function report() {
 
 // ---------- CLI ----------
 const [cmd, arg] = process.argv.slice(2);
-    // list format: ID  [bucket(:deny)(:mcp|:mcp-email|:mcp-cal)]  prompt   (run.mjs parses this)
-if (cmd === "list") for (const [id, t] of Object.entries(TASKS)) console.log(`${id}  [${[t.bucket, t.confirm,     t.mcp === "calendar" ? "mcp-cal" : t.mcp === "email" ? "mcp-email" : t.mcp ? "mcp" : null].filter(Boolean).join(":")}]  ${t.prompt}`);
+    // list format: ID  [bucket(:deny)(:mcp|:mcp-email|:mcp-cal|:mcp-notes)]  prompt   (run.mjs parses this)
+if (cmd === "list") for (const [id, t] of Object.entries(TASKS)) console.log(`${id}  [${[t.bucket, t.confirm,        t.mcp === "notes" ? "mcp-notes" : t.mcp === "calendar" ? "mcp-cal" : t.mcp === "email" ? "mcp-email" : t.mcp ? "mcp" : null].filter(Boolean).join(":")}]  ${t.prompt}`);
 else if (cmd === "setup") (arg === "all" ? Object.keys(TASKS) : [arg]).forEach(setup);
 else if (cmd === "verify") await verify(arg);
 else if (cmd === "report") report();
