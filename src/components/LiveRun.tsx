@@ -8,6 +8,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./liverun.css";
+import Markdown, { markdownToHtml, MARKDOWN_REPORT_CSS } from "./Markdown";
+import EmailStage, { emailTool, describeEmail, emailIcon } from "./EmailStage";
+
 
 // ---------- types ----------
 type AgentEvent =
@@ -131,6 +134,7 @@ function describe(name: string, a: any): string {
     case "claim_check": return Array.isArray(a?.missing) && a.missing.length ? `Checking claims: ${a.missing.join(", ")} missing` : "Checking the agent's claims";
 
     default:
+      if (emailTool(name)) return describeEmail(emailTool(name)!, a);
       if (name.startsWith("mcp__")) {
         const [, server, tool] = name.split("__");
         return `External tool ${tool} (${server})`;
@@ -140,6 +144,7 @@ function describe(name: string, a: any): string {
 }
 
 function icon(name: string): string {
+  if (emailTool(name)) return emailIcon(emailTool(name)!);
   if (name.startsWith("mcp__")) return "🔌";
   const m: Record<string, string> = {
     write_file: "✍️", edit_file: "🩹", read_file: "📖", create_docx: "📝", create_xlsx: "📊",
@@ -380,6 +385,7 @@ function Stage({ card }: { card: Card }) {
     case "create_directory":
       return <div className="lr-delete lr-pop"><div className="lr-big-icon">📁</div><div>{norm(a.relative_path)}</div></div>;
     default:
+      if (emailTool(card.name)) return <EmailStage card={card} />;
       if (["read_file", "read_spreadsheet", "list_directory", "search_files", "get_file_metadata", "git_diff", "git_status", "git_log"].includes(card.name))
         return <ReadStage card={card} />;
       return <GenericStage card={card} />;
@@ -512,11 +518,9 @@ function buildReport(d: ReportData): string {
   const stepRows = d.cards.map((c, i) => {
     const decided = d.decisions[c.id];
     const result = checks.includes(c) ? (c.status === "ok" ? "✓ passed" : "! caught") : c.status === "ok" ? "✓ ok" : c.status === "declined" ? "⊘ declined" : c.status === "waiting" ? "⏸ waiting" : c.status === "running" ? "…" : "✕ error";
-    return `<tr class="${c.status}"><td>${i + 1}</td><td>${esc(describe(c.name, c.args))}<div class="tool">${esc(c.name)}</div>${
-      c.status === "error" || checks.includes(c) ? `<div class="note">${esc(c.preview.slice(0, 300))}</div>` : ""
-    }</td><td><span class="tier ${esc(c.tier)}">${esc(TIER_LABEL[c.tier] ?? c.tier)}</span>${
-      decided === undefined ? "" : `<div class="note">${decided ? "you approved" : "you declined"}</div>`
-    }</td><td>${result}</td><td>${c.durationMs !== undefined ? esc(fmtMs(c.durationMs)) : ""}</td></tr>`;
+    return `<tr class="${c.status}"><td>${i + 1}</td><td>${esc(describe(c.name, c.args))}<div class="tool">${esc(c.name)}</div>${c.status === "error" || checks.includes(c) ? `<div class="note">${esc(c.preview.slice(0, 300))}</div>` : ""
+      }</td><td><span class="tier ${esc(c.tier)}">${esc(TIER_LABEL[c.tier] ?? c.tier)}</span>${decided === undefined ? "" : `<div class="note">${decided ? "you approved" : "you declined"}</div>`
+      }</td><td>${result}</td><td>${c.durationMs !== undefined ? esc(fmtMs(c.durationMs)) : ""}</td></tr>`;
   }).join("");
   const fileRows = d.files.map(([p, m]) => `<li><span class="mark ${esc(m)}">${esc(m)}</span> ${esc(p)}</li>`).join("");
   return `<!DOCTYPE html>
@@ -551,6 +555,7 @@ function buildReport(d: ReportData): string {
   .mark.edited { background: #dbeafe; color: #1d4ed8; } .mark.deleted { background: #fee2e2; color: var(--red); }
   footer { margin-top: 32px; color: var(--muted); font-size: 12px; }
   @media print { body { background: #fff; } main { padding: 0; } }
+       ${MARKDOWN_REPORT_CSS}
 </style></head>
 <body><main>
   <div class="brand">AI CoWorker · run report</div>
@@ -566,17 +571,16 @@ function buildReport(d: ReportData): string {
   </div>
   ${d.modelNote ? `<h2>Model</h2><div class="box">${esc(d.modelNote)}</div>` : ""}
   ${plan.length ? `<h2>Plan (${plan.filter((x) => x.done).length}/${plan.length} done)</h2><div class="box"><ul>${plan
-    .map((x) => `<li><span class="tick ${x.done ? "" : "open"}">${x.done ? "✓" : "○"}</span>${esc(x.text)}</li>`).join("")}</ul></div>` : ""}
+      .map((x) => `<li><span class="tick ${x.done ? "" : "open"}">${x.done ? "✓" : "○"}</span>${esc(x.text)}</li>`).join("")}</ul></div>` : ""}
   ${checks.length ? `<h2>Backend checks</h2><div class="box"><ul>${checks
-    .map((c) => `<li><span class="tick ${c.status === "ok" ? "" : "open"}">${c.status === "ok" ? "✓" : "!"}</span>${esc(c.preview)}</li>`).join("")}</ul></div>` : ""}
+      .map((c) => `<li><span class="tick ${c.status === "ok" ? "" : "open"}">${c.status === "ok" ? "✓" : "!"}</span>${esc(c.preview)}</li>`).join("")}</ul></div>` : ""}
   <h2>Steps</h2>
   <table><thead><tr><th>#</th><th>Action</th><th>Tier (enforced by the backend)</th><th>Result</th><th>Time</th></tr></thead><tbody>${stepRows || `<tr><td colspan="5">No tool calls.</td></tr>`}</tbody></table>
   <h2>Files changed</h2>
   <div class="box">${fileRows ? `<ul>${fileRows}</ul>` : "No files changed."}</div>
   <h2>${d.outcome === "done" ? "Final answer" : "Why it stopped"}</h2>
-  <div class="box"><pre>${esc(d.answer)}</pre></div>
-  <footer>Generated by AI CoWorker. Tiers are enforced in the backend (safe = read-only, mutating = snapshotted before it runs, privileged = blocked until approved). The full audit log is in the workspace's .aicoworker folder.${
-    approvals.length ? ` Approvals in this run: ${approvals.filter(Boolean).length} approved, ${approvals.filter((x) => !x).length} declined.` : ""}</footer>
+       <div class="box">${d.outcome === "done" ? markdownToHtml(d.answer) : `<pre>${esc(d.answer)}</pre>`}</div>
+  <footer>Generated by AI CoWorker. Tiers are enforced in the backend (safe = read-only, mutating = snapshotted before it runs, privileged = blocked until approved). The full audit log is in the workspace's .aicoworker folder.${approvals.length ? ` Approvals in this run: ${approvals.filter(Boolean).length} approved, ${approvals.filter((x) => !x).length} declined.` : ""}</footer>
 </main></body></html>`;
 }
 
@@ -889,7 +893,7 @@ export default function LiveRun(props: Props) {
     </div>
   ) : null;
 
-    async function exportReport() {
+  async function exportReport() {
     const start = isReplay ? replay!.started_at : rec.current?.started_at ?? startedAt ?? Date.now();
     const html = buildReport({
       goal: shownGoal, startedAt: start, seconds: elapsed, outcome: phase === "done" ? "done" : "stopped",

@@ -1,0 +1,31 @@
+/* Agent answers rendered as Markdown (Markdown.tsx). Colours inherit, so it works in any card. */
+.md { white-space: normal; line-height: 1.6; font-size: 14px; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 10px; }
+.md strong { font-weight: 650; color: #fff; }
+.md em { font-style: italic; }
+.md ul, .md ol { margin: 4px 0 10px; padding-left: 22px; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 3px 0; padding-left: 2px; }
+.md li::marker { color: #a78bfa; }
+.md li > ul, .md li > ol { margin: 4px 0 2px; }
+.md .md-h { font-size: 15px; font-weight: 650; margin: 14px 0 6px; color: #fff; }
+.md h3.md-h { font-size: 16px; }
+.md code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px;
+  background: rgba(139, 92, 246, 0.16); border: 1px solid rgba(139, 92, 246, 0.25); padding: 0 5px; border-radius: 5px; }
+.md .md-code { margin: 6px 0 12px; padding: 10px 12px; border-radius: 8px; overflow-x: auto; white-space: pre;
+  background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.08); }
+.md .md-code code { background: none; border: 0; padding: 0; font-size: 12.5px; }
+.md blockquote { margin: 6px 0 10px; padding: 2px 0 2px 12px; border-left: 3px solid rgba(139, 92, 246, 0.6); opacity: 0.9; }
+.md hr { border: 0; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 12px 0; }
+.md .md-link { text-decoration: underline; text-decoration-color: rgba(167, 139, 250, 0.6); }
+.md .md-href { opacity: 0.55; font-size: 12px; }
+.md .md-table-wrap { overflow-x: auto; margin: 6px 0 12px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; }
+.md table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.md th, .md td { padding: 7px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.07); vertical-align: top; }
+.md th { font-weight: 600; background: rgba(139, 92, 246, 0.12); font-size: 12px; text-transform: none; }
+.md tr:last-child td { border-bottom: 0; }
+.md tbody tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
+.lr-answer.md { white-space: normal; }

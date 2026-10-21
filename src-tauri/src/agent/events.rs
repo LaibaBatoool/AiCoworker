@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::sync::OnceLock;
 
-const MAX_PREVIEW_CHARS: usize = 600;
+const MAX_PREVIEW_CHARS: usize = 4000; // enough for an inbox list of 20 emails in the Live view
 /// Big string arguments (e.g. write_file content) are clipped before they are
 /// sent to the UI — enough for a live "typing" preview, never megabytes.
 const MAX_ARG_STRING_CHARS: usize = 20_000;

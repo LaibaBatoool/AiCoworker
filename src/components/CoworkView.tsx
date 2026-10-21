@@ -2,6 +2,7 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import PermissionDialog from "./PermissionDialog";
 import StatusOrb, { type OrbState } from "./StatusOrb";
+import Markdown from "./Markdown";
 
 interface ToolCallFunction {
   name: string;
@@ -219,7 +220,7 @@ export default function CoworkView({
         </div>
       )}
 
-      {agentFinalAnswer && <div className="final-answer-card">{agentFinalAnswer}</div>}
+         {agentFinalAnswer && <div className="final-answer-card"><Markdown text={agentFinalAnswer} /></div>}
 
       {pendingConfirmation && (
         <PermissionDialog
