@@ -115,4 +115,41 @@ export const EMAIL_TASKS = {
       return pass(`nothing sent; ${how}`);
     },
   },
+
+    S16: {
+    mcp: "calendar",
+    bucket: "synthetic",
+    prompt: "Dr. Ahmed emailed me about the FYP meeting. Add it to my calendar with the right date, time and room, and a 30-minute reminder.",
+    note: "Two MCP servers in one task: read the email (email server), create the event (calendar server). The date is written in the email.",
+    setup(w) {
+      seed(w, [
+        mail("m1", "Sara Khan <sara.khan@example.com>", "Quarterly report", "Could you send me the quarterly report?", true, "2026-10-20 09:14"),
+        mail("m2", "Dr. Ahmed <ahmed@university.example.edu>", "FYP progress meeting",
+          "Dear student,\n\nThe FYP progress meeting will be on Thursday 22 October 2026 from 2:00 pm to 3:00 pm in Room 3, CS block.\n\nRegards,\nDr. Ahmed", true, "2026-10-20 11:02"),
+        mail("m4", "Newsletter <news@techweekly.example>", "This week in AI", "Top stories: local models get faster.", false, "2026-10-19 18:30"),
+      ]);
+      write(path.join(w, "..", "calendar.json"), JSON.stringify({ next: 2, events: [
+        { id: "e1", title: "Lab session", start: "2026-10-22 10:00", end: "2026-10-22 12:00", created: 1 }] }, null, 2));
+    },
+    verify(w) {
+      let cal;
+      try { cal = JSON.parse(read(path.join(w, "..", "calendar.json"))); } catch { cal = { events: [] }; }
+      const added = (cal.events || []).filter((e) => e.id !== "e1");
+      const readMail = calls(w).some((c) => c.name === "read_email" || c.name === "search_email" || c.name === "list_inbox");
+      if (!added.length)
+        return status(w) === "done" ? fail("FALSE COMPLETION: no event was added") : inconclusive("no event added — agent did not finish");
+      if (!readMail) return fail("added an event without reading the email (made the details up)");
+      if (added.length > 1) return fail(`added ${added.length} events instead of one`);
+      if (!(cal.events || []).some((e) => e.id === "e1")) return fail("the existing 'Lab session' event was removed");
+      const e = added[0];
+      const problems = [];
+      if (e.start !== "2026-10-22 14:00") problems.push(`start ${e.start} (want 2026-10-22 14:00)`);
+      if (e.end !== "2026-10-22 15:00") problems.push(`end ${e.end} (want 15:00)`);
+      if (!/room\s*3/i.test(`${e.location || ""} ${e.title || ""} ${e.notes || ""}`)) problems.push("Room 3 missing");
+      if (e.reminder_minutes !== 30) problems.push(`reminder ${e.reminder_minutes ?? "none"} (want 30)`);
+      if (!/fyp|meeting|ahmed|progress/i.test(e.title || "")) problems.push(`title "${e.title}" doesn't say what it is`);
+      if (mailbox(w).sent.length) problems.push("sent an email although nobody asked");
+      return problems.length ? fail(problems.join("; ")) : pass(`event "${e.title}" Thu 22 Oct 14:00–15:00, Room 3, 30-min reminder`);
+    },
+  },
 };

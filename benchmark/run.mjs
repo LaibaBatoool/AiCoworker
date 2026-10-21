@@ -63,7 +63,7 @@ function listTasks() {
     if (m) {
       const [bucket, ...tags] = m[2].split(":"); // e.g. "adversarial:deny" or "synthetic:mcp"
       const taskConfirm = tags.find((x) => x === "deny" || x === "allow") || null;
-      tasks.push({ id: m[1], bucket, confirm: taskConfirm,   mcp: tags.includes("mcp-email") ? "email" : tags.includes("mcp"), prompt: m[3] });
+      tasks.push({ id: m[1], bucket, confirm: taskConfirm, mcp: tags.includes("mcp-cal") ? "calendar" : tags.includes("mcp-email") ? "email" : tags.includes("mcp"), prompt: m[3] });
     }
   }
   return tasks;
@@ -85,21 +85,35 @@ fs.writeFileSync(MCP_BENCH_CONFIG, JSON.stringify({
   },
 }, null, 2));
 
-  // Email tasks: our own email MCP server in MOCK mode (nothing is really sent). Mailbox and call
-  // log live next to each task's workspace (relative paths resolve against the server's cwd = workspace).
-  const MCP_EMAIL_CONFIG = path.join(ROOT, ".mcp-email.json");
-  fs.writeFileSync(MCP_EMAIL_CONFIG, JSON.stringify({
-    servers: {
-      email: {
-        command: process.execPath,
-        args: [path.join(ROOT, "..", "mcp-servers", "email", "server.mjs")],
-        env: { EMAIL_MODE: "mock", EMAIL_MOCK_FILE: "../mailbox.json", EMAIL_CALL_LOG: "../email_calls.jsonl" },
-        tier: "privileged", // send_email: the user must approve
-        tool_tiers: { list_inbox: "safe", read_email: "safe", search_email: "safe" },
-      },
-    },
-  }, null, 2));
-  const mcpConfigFor = (t) => (t.mcp === "email" ? MCP_EMAIL_CONFIG : t.mcp ? MCP_BENCH_CONFIG : path.join(ROOT, ".mcp-none.json"));
+// Email + calendar tasks: our own MCP servers, email in MOCK mode (nothing is really sent).
+// Mailbox, calendar and call logs live next to each task's workspace (relative paths resolve
+// against the server's cwd = the workspace). Tiers mirror the README of each server.
+const EMAIL_SERVER = {
+  command: process.execPath,
+  args: [path.join(ROOT, "..", "mcp-servers", "email", "server.mjs")],
+  env: { EMAIL_MODE: "mock", EMAIL_MOCK_FILE: "../mailbox.json", EMAIL_CALL_LOG: "../email_calls.jsonl" },
+  tier: "privileged", // send / forward / delete: the user must approve
+  tool_tiers: {
+    list_inbox: "safe", read_email: "safe", search_email: "safe",
+    mark_email: "mutating", draft_email: "mutating", save_attachments: "mutating"
+  },
+};
+const CALENDAR_SERVER = {
+  command: process.execPath,
+  args: [path.join(ROOT, "..", "mcp-servers", "calendar", "server.mjs")],
+  env: { CALENDAR_FILE: "../calendar.json", CALENDAR_CALL_LOG: "../calendar_calls.jsonl" },
+  tier: "privileged", // delete_event
+  tool_tiers: {
+    list_events: "safe", search_events: "safe", find_free_time: "safe",
+    add_event: "mutating", update_event: "mutating", import_ics: "mutating", export_ics: "mutating"
+  },
+};
+const MCP_EMAIL_CONFIG = path.join(ROOT, ".mcp-email.json");
+fs.writeFileSync(MCP_EMAIL_CONFIG, JSON.stringify({ servers: { email: EMAIL_SERVER } }, null, 2));
+const MCP_CAL_CONFIG = path.join(ROOT, ".mcp-cal.json"); // email + calendar together (S16)
+fs.writeFileSync(MCP_CAL_CONFIG, JSON.stringify({ servers: { email: EMAIL_SERVER, calendar: CALENDAR_SERVER } }, null, 2));
+const mcpConfigFor = (t) =>
+  t.mcp === "calendar" ? MCP_CAL_CONFIG : t.mcp === "email" ? MCP_EMAIL_CONFIG : t.mcp ? MCP_BENCH_CONFIG : path.join(ROOT, ".mcp-none.json");
 
 function runAgent(t) {
   bench(["setup", t.id]); // fresh workspace for every attempt
@@ -112,7 +126,7 @@ function runAgent(t) {
       AICOWORKER_NO_LAUNCH: "1", // open_in_default_app validates but never launches
       // MCP only for MCP tasks (keeps every other task's tool list + token cost identical);
       // a missing file means "no MCP servers" — so the user's own %APPDATA% config never leaks in
-        AICOWORKER_MCP_CONFIG: mcpConfigFor(t),
+      AICOWORKER_MCP_CONFIG: mcpConfigFor(t),
     },
     encoding: "utf8",
     timeout: (timeout + 60) * 1000,

@@ -12,3 +12,4 @@ handoff/
 AiCoworker-handoff.zip
 benchmark/results.json
 benchmark/canary-hits.log
+benchmark/.mcp-cal.json

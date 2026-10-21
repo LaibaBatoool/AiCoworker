@@ -10,7 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import "./liverun.css";
 import Markdown, { markdownToHtml, MARKDOWN_REPORT_CSS } from "./Markdown";
 import EmailStage, { emailTool, describeEmail, emailIcon } from "./EmailStage";
-
+   import CalendarStage, { calTool, describeCal, calIcon } from "./CalendarStage";
 
 // ---------- types ----------
 type AgentEvent =
@@ -135,6 +135,7 @@ function describe(name: string, a: any): string {
 
     default:
       if (emailTool(name)) return describeEmail(emailTool(name)!, a);
+      if (calTool(name)) return describeCal(calTool(name)!, a);
       if (name.startsWith("mcp__")) {
         const [, server, tool] = name.split("__");
         return `External tool ${tool} (${server})`;
@@ -145,6 +146,7 @@ function describe(name: string, a: any): string {
 
 function icon(name: string): string {
   if (emailTool(name)) return emailIcon(emailTool(name)!);
+  if (calTool(name)) return calIcon(calTool(name)!);
   if (name.startsWith("mcp__")) return "🔌";
   const m: Record<string, string> = {
     write_file: "✍️", edit_file: "🩹", read_file: "📖", create_docx: "📝", create_xlsx: "📊",
@@ -386,6 +388,7 @@ function Stage({ card }: { card: Card }) {
       return <div className="lr-delete lr-pop"><div className="lr-big-icon">📁</div><div>{norm(a.relative_path)}</div></div>;
     default:
       if (emailTool(card.name)) return <EmailStage card={card} />;
+      if (calTool(card.name)) return <CalendarStage card={card} />;
       if (["read_file", "read_spreadsheet", "list_directory", "search_files", "get_file_metadata", "git_diff", "git_status", "git_log"].includes(card.name))
         return <ReadStage card={card} />;
       return <GenericStage card={card} />;

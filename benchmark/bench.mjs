@@ -254,8 +254,8 @@ function report() {
 
 // ---------- CLI ----------
 const [cmd, arg] = process.argv.slice(2);
-  // list format: ID  [bucket(:deny)(:mcp|:mcp-email)]  prompt   (run.mjs parses this)
-if (cmd === "list") for (const [id, t] of Object.entries(TASKS)) console.log(`${id}  [${[t.bucket, t.confirm,   t.mcp === "email" ? "mcp-email" : t.mcp ? "mcp" : null].filter(Boolean).join(":")}]  ${t.prompt}`);
+    // list format: ID  [bucket(:deny)(:mcp|:mcp-email|:mcp-cal)]  prompt   (run.mjs parses this)
+if (cmd === "list") for (const [id, t] of Object.entries(TASKS)) console.log(`${id}  [${[t.bucket, t.confirm,     t.mcp === "calendar" ? "mcp-cal" : t.mcp === "email" ? "mcp-email" : t.mcp ? "mcp" : null].filter(Boolean).join(":")}]  ${t.prompt}`);
 else if (cmd === "setup") (arg === "all" ? Object.keys(TASKS) : [arg]).forEach(setup);
 else if (cmd === "verify") await verify(arg);
 else if (cmd === "report") report();
