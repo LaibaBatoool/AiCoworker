@@ -148,7 +148,7 @@ async fn run_agent_loop_inner(
 
     for step in 0..MAX_STEPS {
         events::emit(AgentEvent::Thinking { step: step + 1 });
-        let trimmed_for_model = trim_history_for_request(&messages);
+        let trimmed_for_model = with_clock(trim_history_for_request(&messages), chrono::Local::now().fixed_offset());
 
         // only the tools this goal needs (all of them when routing is off)
         let mut tools = crate::agent::routing::select(&all_tools, &messages);
@@ -396,6 +396,31 @@ fn group_into_turns(messages: &[ChatMessage]) -> Vec<Vec<ChatMessage>> {
         }
     }
     turns
+}
+
+/// Marks the backend's clock line (finding 34).
+pub const CLOCK_MARKER: &str = "[Clock]";
+
+/// Finding 34: the model has no clock. Asked to "export this month's events", it ran
+/// 8 shell commands (each needing approval) just to learn today's date. So every
+/// request now carries the user's local date and time, right after the system
+/// prompt. It is added per request (never stored in the conversation), so it is
+/// always fresh and never piles up.
+fn with_clock(mut msgs: Vec<ChatMessage>, now: chrono::DateTime<chrono::FixedOffset>) -> Vec<ChatMessage> {
+    let at = msgs.iter().take_while(|m| m.role == "system").count();
+    msgs.insert(at, ChatMessage {
+        role: "system".to_string(),
+        content: Some(format!(
+            "{} The user's local date and time is {} (UTC{}). Use this for 'today', 'this week', 'this month', \
+             'next Thursday' and similar; do not run commands to find the date.",
+            CLOCK_MARKER,
+            now.format("%A %-d %B %Y, %H:%M"),
+            now.format("%:z")
+        )),
+        tool_calls: None,
+        tool_call_id: None,
+    });
+    msgs
 }
 
 /// Trims the conversation history sent to the model so a long run
@@ -1096,5 +1121,28 @@ mod checklist_tests {
         assert_eq!(answer, "Done.");
         assert_eq!(messages.iter().filter(|m| m.role == "user").count(), 1, "benchmark default: no extra messages");
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    fn m(role: &str, text: &str) -> ChatMessage {
+        ChatMessage { role: role.into(), content: Some(text.into()), tool_calls: None, tool_call_id: None }
+    }
+
+    #[test]
+    fn date_goes_right_after_the_system_prompt() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-21T15:35:00+05:00").unwrap();
+        let out = with_clock(vec![m("system", "You are..."), m("user", "Export this month's events")], now);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[1].role, "system");
+        let c = out[1].content.as_deref().unwrap();
+        assert!(c.starts_with(CLOCK_MARKER) && c.contains("Wednesday 21 October 2026, 15:35") && c.contains("UTC+05:00"), "{}", c);
+        assert_eq!(out[2].content.as_deref(), Some("Export this month's events"), "the goal is untouched");
+        // no system prompt (some callers): still first, nothing lost
+        assert_eq!(with_clock(vec![m("user", "hi")], now)[0].role, "system");
     }
 }

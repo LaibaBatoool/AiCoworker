@@ -63,6 +63,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "calamine",
+ "chrono",
  "docx-rs",
  "dotenvy",
  "dotext",

@@ -34,6 +34,8 @@ tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 shared_child = "1"
 
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

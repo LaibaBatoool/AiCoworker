@@ -18,6 +18,28 @@ pub struct CommandOutput {
 }
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
+
+/// `cmd /C <command>`, with the command handed to cmd.exe VERBATIM (raw_arg).
+/// With `.args(["/C", command])` Rust quotes the command for the MSVC argument
+/// parser (every `"` becomes `\"`), which cmd.exe does not understand: the
+/// agent's `python -c "print(1)"` ran as `python -c \"print(1)\"` and failed
+/// (seen live 2026-10-21). Verbatim also means the string the classifier
+/// checked is exactly the string that runs. Non-Windows (tests/dev): `sh -c`.
+fn shell(command: &str) -> Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut c = Command::new("cmd");
+        c.arg("/C").raw_arg(command);
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(command);
+        c
+    }
+}
 const MAX_OUTPUT_LINES: usize = 100;
 
 /// Kills a process AND all its descendants, by PID. Necessary on
@@ -45,8 +67,7 @@ pub fn kill_process_tree(pid: u32) {
 pub fn execute_terminal_command(workspace: &Workspace, command: &str) -> Result<CommandOutput, String> {
     let risk = classify_command_risk(command);
 
-    let mut child = Command::new("cmd")
-        .args(["/C", command])
+    let mut child = shell(command)
         .current_dir(workspace.root())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -90,9 +111,8 @@ pub fn execute_terminal_command(workspace: &Workspace, command: &str) -> Result<
 pub fn spawn_terminal_command(workspace: &Workspace, command: &str) -> Result<(Arc<SharedChild>, String), String> {
     let risk = classify_command_risk(command);
 
-    let mut cmd = Command::new("cmd");
-    cmd.args(["/C", command])
-        .current_dir(workspace.root())
+    let mut cmd = shell(command);
+    cmd.current_dir(workspace.root())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -197,4 +217,29 @@ fn truncate_output(text: &str) -> String {
         omitted,
         tail.join("\n")
     )
+}
+
+
+// ---------------------------------------------------------------
+// Tests: `cargo test execute_command`
+// ---------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn double_quotes_reach_the_shell_unchanged() {
+        let d = std::env::temp_dir().join(format!("aicw_exec_{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let ws = Workspace::new(d.to_str().unwrap()).unwrap();
+        let out = execute_terminal_command(&ws, r#"echo "hi there""#).unwrap();
+        assert_eq!(out.exit_code, Some(0), "{:?}", out);
+        // cmd's echo prints the quotes; sh's echo removes them. Never \"hi there\".
+        #[cfg(windows)]
+        assert_eq!(out.stdout.trim(), r#""hi there""#);
+        #[cfg(not(windows))]
+        assert_eq!(out.stdout.trim(), "hi there");
+        assert!(!out.stdout.contains('\\'), "no backslash-escaped quotes: {}", out.stdout);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
