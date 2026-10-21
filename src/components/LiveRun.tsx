@@ -1039,7 +1039,7 @@ export default function LiveRun(props: Props) {
                 <div className="lr-done">
                   <div className="lr-done-check">✓</div>
                   <div className="lr-done-title">Finished in {elapsed.toFixed(1)}s</div>
-                  <pre className="lr-answer">{shownAnswer}</pre>
+                  <Markdown className="lr-answer" text={shownAnswer} />
                   {changedFiles.length > 0 && (
                     <div className="lr-chips">
                       {changedFiles.map(([p, m]) => <span key={p} className={`lr-chip lr-badge-${m}`}>{m} · {p}</span>)}
