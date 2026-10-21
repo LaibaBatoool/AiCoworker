@@ -193,6 +193,11 @@ pub fn goal_has_many_items(goal: &str) -> bool {
         || g.contains("one per ")
 }
 
+/// Built-in tools whose tier is "safe" only read.
+fn read_only(name: &str) -> bool {
+    crate::tools::registry::all_tool_schemas().iter().any(|t| t.name == name && t.tier == "safe")
+}
+
 /// How many different files this run's tool calls named (directory listings and
 /// searches don't count; the checklist tool itself doesn't either).
 pub fn paths_touched(messages: &[ChatMessage]) -> usize {
@@ -201,8 +206,8 @@ pub fn paths_touched(messages: &[ChatMessage]) -> usize {
     for m in messages {
         for c in m.tool_calls.iter().flatten() {
             let name = c.function.name.as_str();
-            if matches!(name, "list_directory" | "search_files" | "request_tools") || name == TOOL {
-                continue;
+            if matches!(name, "list_directory" | "search_files" | "request_tools") || name == TOOL || read_only(name) {
+                continue; // reading 6 files is not 6 items of work (finding 36)
             }
             let Ok(args) = serde_json::from_str::<Value>(&c.function.arguments) else { continue };
             let mut add = |v: &Value| {
@@ -344,7 +349,19 @@ mod tests {
             tool("move_rename", r#"{"from_relative_path":"b.jpeg","to_relative_path":"b.jpg"}"#),
             tool(TOOL, r#"{"items":[{"text":"x","done":false}]}"#),
         ];
-        assert_eq!(paths_touched(&m), 3); // notes/a.txt, b.jpeg, b.jpg
+        assert_eq!(paths_touched(&m), 2); // b.jpeg, b.jpg — reads don't count
+    }
+
+    #[test]
+    fn reading_many_files_is_not_a_multi_item_task() {
+        // finding 36: "What's on my to-do list?" read 6 files, the plan check fired,
+        // and the model made a fake checklist of the files it had read
+        let mut m = vec![user("What's on my to-do list?")];
+        for f in ["notes.txt", "readme.md", "poem.md", "cloud.txt", "writetest.txt", "events.ics"] {
+            m.push(tool("read_file", &format!(r#"{{"relative_path":"{}"}}"#, f)));
+        }
+        assert_eq!(paths_touched(&m), 0);
+        assert!(needs_plan_check(&m).is_none());
     }
 
     #[test]

@@ -100,10 +100,10 @@ fn user_text(messages: &[ChatMessage]) -> String {
         .to_lowercase()
 }
 
-/// True if `word` appears in `text` as a word (or, for words with a dot or a
-/// space, as a substring).
+/// True if `word` appears in `text` as a word (or, for words with a dot, a
+/// space, a hyphen or other punctuation like "to-do", as a substring).
 fn mentions(text: &str, word: &str) -> bool {
-    if word.contains('.') || word.contains(' ') {
+    if word.chars().any(|c| !c.is_alphanumeric()) {
         return text.contains(word);
     }
     text.split(|c: char| !c.is_alphanumeric())
@@ -112,6 +112,11 @@ fn mentions(text: &str, word: &str) -> bool {
 
 /// Groups to send this turn.
 pub fn active_groups(all: &[ToolSchema], messages: &[ChatMessage]) -> BTreeSet<&'static str> {
+    active_groups_with(all, messages, &[])
+}
+
+/// Same, plus the user's own routing keywords for MCP servers (mcp.json "keywords").
+pub fn active_groups_with(all: &[ToolSchema], messages: &[ChatMessage], keywords: &[String]) -> BTreeSet<&'static str> {
     let mut on: BTreeSet<&'static str> = BTreeSet::new();
     on.insert("core");
     let text = user_text(messages);
@@ -120,7 +125,8 @@ pub fn active_groups(all: &[ToolSchema], messages: &[ChatMessage]) -> BTreeSet<&
             on.insert(g);
         }
     }
-    if mcp_words(all).iter().any(|w| mentions(&text, w)) {
+    let has_mcp = all.iter().any(|t| t.name.starts_with("mcp__"));
+    if mcp_words(all).iter().any(|w| mentions(&text, w)) || (has_mcp && keywords.iter().any(|w| mentions(&text, w))) {
         on.insert("connections");
     }
     // groups already used, or explicitly requested, in this conversation
@@ -177,7 +183,7 @@ pub fn select(all: &[ToolSchema], messages: &[ChatMessage]) -> Vec<ToolSchema> {
     if !enabled() {
         return all.iter().map(copy).collect();
     }
-    let on = active_groups(all, messages);
+    let on = active_groups_with(all, messages, &crate::agent::mcp::route_keywords());
     let mut out: Vec<ToolSchema> = all.iter().filter(|t| on.contains(group_of(&t.name))).map(copy).collect();
     if let Some(req) = request_tools_schema(all, &on) {
         out.push(req);
@@ -271,6 +277,20 @@ mod tests {
         // the checklist / claim-check messages say "tool" and "file"; only the user's words count
         let msgs = vec![user("Rename every .jpeg file in photos"), user(&crate::agent::checklist::plan_request())];
         assert_eq!(active_groups(&all(), &msgs).into_iter().collect::<Vec<_>>(), vec!["core"]);
+    }
+
+        #[test]
+    fn user_keywords_load_mcp_tools() {
+        // finding 36: "to-do" is in no tool name, so list_tasks was never loaded
+        let tools: Vec<ToolSchema> = all().into_iter().chain([t("mcp__notes__list_tasks"), t("mcp__notes__add_task")]).collect();
+        let ask = [user("What's on my to-do list?")];
+        assert!(!active_groups(&tools, &ask).contains("connections"), "tool names alone miss it");
+        let kw = vec!["to-do".to_string(), "todo".to_string()];
+        assert!(active_groups_with(&tools, &ask, &kw).contains("connections"), "hyphenated keyword matches");
+        assert!(active_groups_with(&tools, &[user("add a todo: buy milk")], &kw).contains("connections"));
+        assert!(!active_groups_with(&tools, &[user("Write a poem to poem.md")], &kw).contains("connections"));
+        let no_mcp: Vec<ToolSchema> = tools.into_iter().filter(|t| !t.name.starts_with("mcp__")).collect();
+        assert!(!active_groups_with(&no_mcp, &ask, &kw).contains("connections"), "no MCP tools = keywords do nothing");
     }
 
     #[test]

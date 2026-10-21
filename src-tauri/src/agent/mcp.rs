@@ -62,6 +62,11 @@ pub struct McpServerConfig {
     pub allow_tools: Option<Vec<String>>,
     #[serde(default)]
     pub disabled: bool,
+    /// Extra words that load this server's tools when tool routing is on, e.g.
+    /// ["to-do", "todo", "reminder"]. Tool names alone missed everyday words
+    /// ("What's on my to-do list?" never loaded list_tasks; finding 36).
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -82,6 +87,14 @@ pub fn config_path() -> Option<std::path::PathBuf> {
         .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.config", h)))
         .ok()?;
     Some(std::path::Path::new(&base).join("AiCoworker").join("mcp.json"))
+}
+
+/// Routing keywords of every enabled server in the user's config (lower-case).
+/// A missing or broken config simply means none.
+pub fn route_keywords() -> Vec<String> {
+    load_config()
+        .map(|c| c.servers.values().filter(|s| !s.disabled).flat_map(|s| s.keywords.iter().map(|k| k.trim().to_lowercase())).filter(|k| !k.is_empty()).collect())
+        .unwrap_or_default()
 }
 
 /// Missing file = no MCP servers (not an error).
