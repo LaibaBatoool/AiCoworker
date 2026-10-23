@@ -1,0 +1,169 @@
+/* AI CoWorker — black theme.
+ * Loaded LAST (main.tsx), so it only overrides colours; layout stays in the original files.
+ * Part 1 is generated: every purple / navy-tinted colour in the app's CSS turned into a neutral grey of
+ * the same brightness. Meaning colours are untouched: green = safe, amber = waiting/mutating,
+ * red = danger, blue = "changes files". Part 2 is the hand-picked palette and has the final say.
+ * To go back to the violet theme, remove the `import "./theme-black.css";` line in main.tsx. */
+
+/* ================= Part 1: generated overrides ================= */
+
+/* ---- from cowork.css ---- */
+:root { --bg: #0c0c0c; --surface: #141414; --surface-raised: #1a1a1a; --border: #393939; --accent-violet: #adadad; --accent-violet-soft: rgba(173, 173, 173, 0.15); }
+@keyframes pulse-violet {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(173, 173, 173, 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(173, 173, 173, 0); }
+}
+.permission-overlay { background: rgba(6, 6, 6, 0.7); }
+
+/* ---- from components/liverun.css ---- */
+.lr-overlay { --lr-bg: #0b0b0b; --lr-panel: #131313; --lr-panel-2: #181818; --lr-line: #3b3b3b; --lr-text: #eeeeee; --lr-muted: #9e9e9e; --lr-violet: #a9a9a9; background: rgba(6, 6, 6, 0.72); }
+.lr-shell { box-shadow: 0 0 0 1px rgba(169, 169, 169, 0.08), 0 30px 80px rgba(0, 0, 0, 0.6), 0 0 60px rgba(169, 169, 169, 0.12); }
+.lr-header { background: linear-gradient(90deg, rgba(169, 169, 169, 0.12), rgba(59, 130, 246, 0.06) 60%, transparent); }
+.lr-orb { background: radial-gradient(circle at 35% 30%, #d9d9d9, var(--lr-violet) 45%, #565656 100%); }
+.lr-orb-thinking span { border-top-color: rgba(217, 217, 217, 0.8); }
+.lr-orb-acting { background: radial-gradient(circle at 35% 30%, #bfdbfe, var(--lr-blue) 45%, #545454 100%); }
+.lr-card:hover { border-color: #626262; }
+.lr-shimmer { background: linear-gradient(90deg, var(--lr-muted) 0%, #eaeaea 50%, var(--lr-muted) 100%); }
+.lr-follow { color: #d9d9d9; }
+.lr-window { background: #0a0a0a; }
+.lr-ln { color: #5a5a5a; }
+.lr-caret { background: #d9d9d9; }
+.lr-sheet td { border: 1px solid #1d1d1d; }
+.lr-header-row td:not(.lr-rownum) { background: rgba(169, 169, 169, 0.12); }
+.lr-page { background: #fcfcfc; color: #181818; }
+.lr-h1 { color: #3a3a3a; }
+.lr-doc-table th { background: #f3f3f3; }
+.lr-doc-table th, .lr-doc-table td { border: 1px solid #d9d9d9; }
+.lr-terminal { background: #050505; }
+.lr-read-body { color: #d4d4d4; }
+.lr-scanning::after { background: linear-gradient(180deg, transparent, rgba(169, 169, 169, 0.25), transparent); }
+.lr-arrow { color: #d9d9d9; }
+.lr-pill { border: 1px solid #626262; background: #131313; color: #eeeeee; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 24px rgba(169, 169, 169, 0.25); }
+.lr-orb-mini { background: #a9a9a9; }
+.lr-btn-undo { background: rgba(169, 169, 169, 0.16); color: #eaeaea; border: 1px solid rgba(169, 169, 169, 0.55); }
+.lr-pill-replay { border-color: #525252; }
+.lr-rec-play { color: #d9d9d9; }
+.lr-speed.on { color: #eaeaea; background: rgba(169, 169, 169, 0.16); }
+
+/* ---- from components/markdown.css ---- */
+.md li::marker { color: #c2c2c2; }
+.md code { background: rgba(169, 169, 169, 0.16); border: 1px solid rgba(169, 169, 169, 0.25); }
+.md blockquote { border-left: 3px solid rgba(169, 169, 169, 0.6); }
+.md .md-link { text-decoration-color: rgba(194, 194, 194, 0.6); }
+.md th { background: rgba(169, 169, 169, 0.12); }
+
+/* ---- from components/mcppanel.css ---- */
+.mcp-panel { border: 1px solid #3b3b3b; background: #131313; color: #eeeeee; }
+.mcp-sub, .mcp-muted { color: #9e9e9e; }
+.mcp-actions button { background: rgba(169, 169, 169, 0.16); color: #eaeaea; border: 1px solid rgba(169, 169, 169, 0.55); }
+.mcp-path { color: #d4d4d4; }
+.mcp-path code { background: #181818; }
+.mcp-server { border-top: 1px dashed #3b3b3b; }
+.mcp-dot { background: #5a5a5a; }
+.mcp-table td { border-bottom: 1px solid #1d1d1d; }
+.mcp-desc { color: #b8b8b8; }
+
+/* ---- from components/emailstage.css ---- */
+.em-panel { background: var(--lr-panel, #131313); border: 1px solid var(--lr-line, #3b3b3b); }
+.em-panel-head { border-bottom: 1px solid var(--lr-line, #3b3b3b); background: rgba(169, 169, 169, 0.06); }
+.em-muted { color: var(--lr-muted, #9e9e9e); }
+.em-empty { color: var(--lr-muted, #9e9e9e); }
+.em-avatar { background: #4d4d4d; }
+.em-from { color: var(--lr-text, #eeeeee); }
+.em-date { color: var(--lr-muted, #9e9e9e); }
+.em-subject { color: #d8d8d8; }
+.em-preview { color: var(--lr-muted, #9e9e9e); }
+.em-id { color: var(--lr-muted, #9e9e9e); }
+.em-skeleton .em-avatar, .em-skeleton i, .em-skeleton-block i { background: linear-gradient(90deg, #1d1d1d 0%, #3f3f3f 50%, #1d1d1d 100%); }
+.em-note { color: var(--lr-muted, #9e9e9e); }
+.em-chip { background: var(--lr-panel-2, #181818); border: 1px solid var(--lr-line, #3b3b3b); }
+.em-field > span { color: var(--lr-muted, #9e9e9e); }
+.em-banner { border: 1px solid var(--lr-line, #3b3b3b); }
+
+/* ---- from components/calendarstage.css ---- */
+.cal-panel { background: var(--lr-panel, #131313); border: 1px solid var(--lr-line, #3b3b3b); }
+.cal-head { border-bottom: 1px solid var(--lr-line, #3b3b3b); }
+.cal-muted { color: var(--lr-muted, #9e9e9e); }
+.cal-empty { color: var(--lr-muted, #9e9e9e); }
+.cal-day + .cal-day { border-top: 1px solid var(--lr-line, #3b3b3b); }
+.cal-day-label { color: var(--lr-muted, #9e9e9e); }
+.cal-time span { color: var(--lr-muted, #9e9e9e); }
+.cal-time em { color: #d9d9d9; }
+.cal-meta { color: var(--lr-muted, #9e9e9e); }
+.cal-id { color: var(--lr-muted, #9e9e9e); }
+.cal-tile { color: #1c1c1c; }
+.cal-before { color: var(--lr-muted, #9e9e9e); }
+.cal-bar { background: repeating-linear-gradient(135deg, #363636 0 6px, #1d1d1d 6px 12px); border: 1px solid var(--lr-line, #3b3b3b); }
+.cal-hours { color: var(--lr-muted, #9e9e9e); }
+.cal-legend { color: var(--lr-muted, #9e9e9e); }
+.cal-sw-busy { background: #363636; border: 1px solid var(--lr-line, #3b3b3b); }
+.cal-banner { border: 1px solid var(--lr-line, #3b3b3b); }
+
+/* ---- from components/notesstage.css ---- */
+.nt-panel { background: var(--lr-panel, #131313); border: 1px solid var(--lr-line, #3b3b3b); }
+.nt-head { border-bottom: 1px solid var(--lr-line, #3b3b3b); }
+.nt-muted { color: var(--lr-muted, #9e9e9e); }
+.nt-empty { color: var(--lr-muted, #9e9e9e); }
+.nt-box { border: 2px solid #7d7d7d; color: #0b0b0b; }
+.nt-done .nt-task-title { color: var(--lr-muted, #9e9e9e); }
+.nt-due { color: #d9d9d9; }
+.nt-id { color: var(--lr-muted, #9e9e9e); }
+.nt-before { color: var(--lr-muted, #9e9e9e); }
+.nt-note-tile:nth-child(3n + 2) { color: #3f3f3f; }
+.nt-banner { border: 1px solid var(--lr-line, #3b3b3b); }
+
+
+/* ================= Part 2: palette (final say) ================= */
+:root {
+  --bg: #050505;
+  --surface: #0e0e0e;
+  --surface-raised: #161616;
+  --border: #262626;
+  --text: #f2f2f2;
+  --text-muted: #a3a3a3;
+  --text-faint: #5c5c5c;
+  --accent-violet: #fafafa;                     /* the accent is white now */
+  --accent-violet-soft: rgba(255, 255, 255, 0.07);
+  --accent-blue: #d4d4d4;
+}
+.lr-overlay {
+  --lr-bg: #050505;
+  --lr-panel: #0e0e0e;
+  --lr-panel-2: #161616;
+  --lr-line: #262626;
+  --lr-text: #ededed;
+  --lr-muted: #8f8f8f;
+  --lr-violet: #e5e5e5;
+  background: rgba(0, 0, 0, 0.75);
+}
+
+/* primary buttons and brand marks: white with black text */
+.titlebar-brand-mark, .sidebar-brand-mark, .run-button { background: #fafafa; color: #0a0a0a; }
+.run-button:hover:not(:disabled) { background: #ffffff; box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12); }
+.run-button:disabled { background: #2a2a2a; color: #6b6b6b; }
+
+/* live view: a calm black header instead of the violet glow */
+.lr-header { background: linear-gradient(90deg, rgba(255, 255, 255, 0.04), transparent 70%); }
+.lr-shell { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 30px 80px rgba(0, 0, 0, 0.8); }
+.lr-orb { background: radial-gradient(circle at 35% 30%, #ffffff, #a3a3a3 45%, #262626 100%); }
+.md code { background: rgba(255, 255, 255, 0.07); border-color: rgba(255, 255, 255, 0.12); }
+
+/* Debug Tools page was white: make it match */
+.debug-view { background: var(--bg); color: var(--text); }
+.debug-view input, .debug-view textarea, .debug-view select {
+  background: #121212; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
+}
+.debug-view button { background: #1a1a1a; color: var(--text); border: 1px solid #333; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.debug-view button:hover { background: #242424; }
+.debug-view pre { background: #101010 !important; color: #d4d4d4; border: 1px solid var(--border); border-radius: 6px; }  /* !important: inline styles */
+.debug-view table { border-color: var(--border); }
+.debug-view th, .debug-view td { border-color: var(--border) !important; }
+.debug-view hr { border-color: var(--border); }
+.debug-view a { color: #e5e5e5; }
+
+/* scrollbars */
+* { scrollbar-color: #333 transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2e2e2e; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #444; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
