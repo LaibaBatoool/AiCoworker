@@ -1,40 +1,44 @@
-mod workspace;
-mod permission;
-mod tools;
 pub mod agent;
-mod running_commands;
+mod egress;
+mod permission;
 mod recordings;
 mod reports;
-mod egress;
+mod running_commands;
+mod tools;
+mod workspace;
 
+use permission::{checkpoint, log_action, read_audit_log, AuditLogRecord, PermissionTier};
+use running_commands::RunningCommands;
 use std::sync::Arc;
 use tauri::Emitter;
-use workspace::Workspace;
-use permission::{checkpoint, log_action, read_audit_log, AuditLogRecord, PermissionTier};
-use tools::read_file::read_file;
-use tools::list_directory::{list_directory, DirEntry};
-use tools::write_file::write_file;
+use tools::archive::{create_archive, extract_archive, CreateArchiveResult, ExtractResult};
+use tools::command_classifier::classify_command_risk;
 use tools::convert_to_pdf::convert_to_pdf;
-use tools::edit_file::edit_file;
+use tools::create_directory::create_directory;
 use tools::delete_file::delete_file;
+use tools::edit_file::edit_file;
 use tools::execute_command::{
     execute_terminal_command, spawn_terminal_command, wait_for_spawned_command, CommandOutput,
 };
-use tools::create_directory::create_directory;
-use tools::move_rename::move_rename;
-use tools::search_files::{search_files, SearchResult};
-use tools::file_metadata::{get_file_metadata, FileMetadata};
-use tools::git_ops::{git_diff, git_commit, git_status, git_log, GitDiffResult, GitCommitResult, GitStatusResult, GitLogEntry};
 use tools::fetch_url::{fetch_url, FetchUrlResult};
+use tools::file_metadata::{get_file_metadata, FileMetadata};
+use tools::git_ops::{
+    git_commit, git_diff, git_log, git_status, GitCommitResult, GitDiffResult, GitLogEntry,
+    GitStatusResult,
+};
+use tools::list_directory::{list_directory, DirEntry};
+use tools::move_rename::move_rename;
 use tools::office_docs::{create_docx, create_xlsx};
-use tools::archive::{create_archive, extract_archive, CreateArchiveResult, ExtractResult};
-use tools::read_spreadsheet::{read_spreadsheet, SpreadsheetData};
-use tools::pdf_pages::{extract_pdf_pages, merge_pdfs, PdfPagesResult};
 use tools::open_file::{check_openable, open_in_default_app, OpenResult};
-use tools::command_classifier::classify_command_risk;
-use tools::snapshot::{take_snapshot, list_snapshots, restore_snapshot, SnapshotRecord};
+use tools::desktop::{ClipboardContent, CloseResult, ScreenshotResult, WindowInfo};
+use tools::pdf_pages::{extract_pdf_pages, merge_pdfs, PdfPagesResult};
+use tools::read_file::read_file;
+use tools::read_spreadsheet::{read_spreadsheet, SpreadsheetData};
 use tools::registry::{all_tool_schemas, ToolSchema};
-use running_commands::RunningCommands;
+use tools::search_files::{search_files, SearchResult};
+use tools::snapshot::{list_snapshots, restore_snapshot, take_snapshot, SnapshotRecord};
+use tools::write_file::write_file;
+use workspace::Workspace;
 
 /// Takes a pre-action snapshot. Snapshot failures never block the
 /// actual operation (same philosophy as audit logging), but ARE now
@@ -70,7 +74,13 @@ fn read_spreadsheet_tool(
     max_rows: Option<usize>,
 ) -> Result<SpreadsheetData, String> {
     let ws = Workspace::new(&workspace_root)?;
-    read_spreadsheet(&ws, &relative_path, sheet_name.as_deref(), start_row, max_rows)
+    read_spreadsheet(
+        &ws,
+        &relative_path,
+        sheet_name.as_deref(),
+        start_row,
+        max_rows,
+    )
 }
 
 #[tauri::command]
@@ -94,7 +104,10 @@ fn search_files_tool(
 }
 
 #[tauri::command]
-fn get_file_metadata_tool(workspace_root: String, relative_path: String) -> Result<FileMetadata, String> {
+fn get_file_metadata_tool(
+    workspace_root: String,
+    relative_path: String,
+) -> Result<FileMetadata, String> {
     let ws = Workspace::new(&workspace_root)?;
     get_file_metadata(&ws, &relative_path)
 }
@@ -118,25 +131,51 @@ fn git_log_tool(workspace_root: String, max_count: u32) -> Result<Vec<GitLogEntr
 }
 
 #[tauri::command]
-fn fetch_url_tool(workspace_root: String, url: String, confirmed: bool) -> Result<FetchUrlResult, String> {
+fn fetch_url_tool(
+    workspace_root: String,
+    url: String,
+    confirmed: bool,
+) -> Result<FetchUrlResult, String> {
     let ws = Workspace::new(&workspace_root)?;
-        // Egress guard: a URL can carry data out too (e.g. https://evil.example/?k=<secret>).
+    // Egress guard: a URL can carry data out too (e.g. https://evil.example/?k=<secret>).
     if let Err(e) = crate::egress::check_url(ws.root(), &url) {
-        log_action(&ws, &PermissionTier::Privileged, "fetch_url: [egress blocked]", false, &e);
+        log_action(
+            &ws,
+            &PermissionTier::Privileged,
+            "fetch_url: [egress blocked]",
+            false,
+            &e,
+        );
         return Err(e);
     }
 
     // Central permission checkpoint: refuses unconfirmed privileged actions with the
     // standard PRIVILEGED_CONFIRMATION_REQUIRED error that the orchestrator turns into a dialog.
-    checkpoint(&PermissionTier::Privileged, &format!("fetch_url: {}", url), confirmed)?;
+    checkpoint(
+        &PermissionTier::Privileged,
+        &format!("fetch_url: {}", url),
+        confirmed,
+    )?;
 
     match fetch_url(&url) {
         Ok(r) => {
-            log_action(&ws, &PermissionTier::Privileged, &format!("fetch_url: {}", url), true, "ok");
+            log_action(
+                &ws,
+                &PermissionTier::Privileged,
+                &format!("fetch_url: {}", url),
+                true,
+                "ok",
+            );
             Ok(r)
         }
         Err(e) => {
-            log_action(&ws, &PermissionTier::Privileged, &format!("fetch_url: {}", url), false, &e);
+            log_action(
+                &ws,
+                &PermissionTier::Privileged,
+                &format!("fetch_url: {}", url),
+                false,
+                &e,
+            );
             Err(e)
         }
     }
@@ -155,7 +194,13 @@ fn create_docx_tool(
     snapshot_before(&ws, &action);
 
     let result = create_docx(&ws, &relative_path, &blocks);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -174,7 +219,13 @@ fn create_xlsx_tool(
     snapshot_before(&ws, &action);
 
     let result = create_xlsx(&ws, &relative_path, sheet_name, &headers, &rows);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -192,7 +243,13 @@ fn extract_archive_tool(
     snapshot_before(&ws, &action);
 
     let result = extract_archive(&ws, &archive_relative_path, &dest);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -204,12 +261,22 @@ fn create_archive_tool(
     confirmed: bool,
 ) -> Result<CreateArchiveResult, String> {
     let ws = Workspace::new(&workspace_root)?;
-    let action = format!("create_archive: {} <- {}", archive_relative_path, source_relative_paths.join(", "));
+    let action = format!(
+        "create_archive: {} <- {}",
+        archive_relative_path,
+        source_relative_paths.join(", ")
+    );
     checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
     snapshot_before(&ws, &action);
 
     let result = create_archive(&ws, &source_relative_paths, &archive_relative_path);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -221,12 +288,22 @@ fn merge_pdfs_tool(
     confirmed: bool,
 ) -> Result<PdfPagesResult, String> {
     let ws = Workspace::new(&workspace_root)?;
-    let action = format!("merge_pdfs: {} <- {}", output_relative_path, source_relative_paths.join(", "));
+    let action = format!(
+        "merge_pdfs: {} <- {}",
+        output_relative_path,
+        source_relative_paths.join(", ")
+    );
     checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
     snapshot_before(&ws, &action);
 
     let result = merge_pdfs(&ws, &source_relative_paths, &output_relative_path);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -239,12 +316,21 @@ fn extract_pdf_pages_tool(
     confirmed: bool,
 ) -> Result<PdfPagesResult, String> {
     let ws = Workspace::new(&workspace_root)?;
-    let action = format!("extract_pdf_pages: {} [{}] -> {}", relative_path, pages, output_relative_path);
+    let action = format!(
+        "extract_pdf_pages: {} [{}] -> {}",
+        relative_path, pages, output_relative_path
+    );
     checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
     snapshot_before(&ws, &action);
 
     let result = extract_pdf_pages(&ws, &relative_path, &pages, &output_relative_path);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -265,7 +351,94 @@ fn open_in_default_app_tool(
     checkpoint(&PermissionTier::Privileged, &action, confirmed)?;
 
     let result = open_in_default_app(&ws, &relative_path);
-    log_action(&ws, &PermissionTier::Privileged, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Privileged,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
+    result
+}
+
+// ---- Desktop tools (tools/desktop.rs) ----
+
+#[tauri::command]
+fn system_info_tool(workspace_root: String) -> Result<serde_json::Value, String> {
+    let _ws = Workspace::new(&workspace_root)?;
+    tools::desktop::system_info()
+}
+
+#[tauri::command]
+fn list_processes_tool(workspace_root: String, limit: u32) -> Result<serde_json::Value, String> {
+    let _ws = Workspace::new(&workspace_root)?;
+    tools::desktop::list_processes(limit)
+}
+
+#[tauri::command]
+fn list_windows_tool(workspace_root: String) -> Result<Vec<WindowInfo>, String> {
+    let _ws = Workspace::new(&workspace_root)?;
+    tools::desktop::list_windows()
+}
+
+#[tauri::command]
+fn close_app_tool(workspace_root: String, app: String, force: bool, confirmed: bool) -> Result<Vec<CloseResult>, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("close_app: {}{}", app, if force { " (force)" } else { "" });
+    // Pick the targets BEFORE asking: a protected or windowless process
+    // never even produces a dialog the user might click through.
+    let targets = match tools::desktop::list_windows().and_then(|w| tools::desktop::pick_targets(&w, &app, std::process::id())) {
+        Ok(t) => t,
+        Err(e) => {
+            log_action(&ws, &PermissionTier::Privileged, &action, false, &e);
+            return Err(e);
+        }
+    };
+    let names: Vec<String> = targets.iter().map(|t| format!("{} (pid {}): {}", t.name, t.pid, t.title)).collect();
+    checkpoint(&PermissionTier::Privileged, &format!("{} -> {}", action, names.join("; ")), confirmed)?;
+    let result = tools::desktop::close_app(&targets, force);
+    log_action(&ws, &PermissionTier::Privileged, &format!("{} -> {}", action, names.join("; ")), result.is_ok(), &format!("{:?}", result));
+    result
+}
+
+#[tauri::command]
+fn clipboard_read_tool(workspace_root: String, confirmed: bool) -> Result<ClipboardContent, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    checkpoint(&PermissionTier::Privileged, "clipboard_read", confirmed)?;
+    let result = tools::desktop::clipboard_read();
+    // Never log the clipboard itself (it may hold a password): only its size.
+    let detail = match &result {
+        Ok(c) => format!("{} chars, {} files", c.text.chars().count(), c.files.len()),
+        Err(e) => e.clone(),
+    };
+    log_action(&ws, &PermissionTier::Privileged, "clipboard_read", result.is_ok(), &detail);
+    result
+}
+
+#[tauri::command]
+fn clipboard_write_tool(workspace_root: String, text: String, confirmed: bool) -> Result<String, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("clipboard_write: {} chars", text.chars().count());
+    if let Err(e) = tools::desktop::check_clipboard_text(&text) {
+        log_action(&ws, &PermissionTier::Mutating, &action, false, &e);
+        return Err(e);
+    }
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    let result = tools::desktop::clipboard_write(&text);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    result
+}
+
+#[tauri::command]
+fn take_screenshot_tool(workspace_root: String, delay_seconds: u32, confirmed: bool) -> Result<ScreenshotResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    checkpoint(&PermissionTier::Privileged, "take_screenshot", confirmed)?;
+    let result = tools::desktop::take_screenshot(&ws, delay_seconds);
+    let detail = match &result {
+        Ok(r) => format!("saved {} ({}x{}), {} chars of screen text", r.saved_to, r.width, r.height, r.screen_text.chars().count()),
+        Err(e) => e.clone(),
+    };
+    log_action(&ws, &PermissionTier::Privileged, "take_screenshot", result.is_ok(), &detail);
     result
 }
 
@@ -279,10 +452,16 @@ fn mcp_tool(
     confirmed: bool,
 ) -> Result<String, String> {
     let ws = Workspace::new(&workspace_root)?;
-        // Egress guard: block BEFORE asking the user or contacting the server.
+    // Egress guard: block BEFORE asking the user or contacting the server.
     // The log entry names the tool only — never the (secret-carrying) arguments.
     if let Err(e) = crate::egress::check_mcp_arguments(ws.root(), &name, &arguments) {
-        log_action(&ws, &PermissionTier::Privileged, &format!("{} [egress blocked]", name), false, &e);
+        log_action(
+            &ws,
+            &PermissionTier::Privileged,
+            &format!("{} [egress blocked]", name),
+            false,
+            &e,
+        );
         return Err(e);
     }
     let tier = match agent::mcp::tier_of(&workspace_root, &name) {
@@ -335,7 +514,9 @@ fn save_report_tool(html: String, started_at: u64) -> Result<String, String> {
 
 #[tauri::command]
 fn list_recordings_tool() -> Vec<recordings::RecordingInfo> {
-    recordings::recordings_dir().map(|d| recordings::list_in(&d)).unwrap_or_default()
+    recordings::recordings_dir()
+        .map(|d| recordings::list_in(&d))
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -372,7 +553,13 @@ fn write_file_tool(
     snapshot_before(&ws, &action);
 
     let result = write_file(&ws, &relative_path, &content);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -388,7 +575,13 @@ fn convert_to_pdf_tool(
     snapshot_before(&ws, &action);
 
     let result = convert_to_pdf(&ws, &relative_path);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -406,7 +599,13 @@ fn edit_file_tool(
     snapshot_before(&ws, &action);
 
     let result = edit_file(&ws, &relative_path, &old_text, &new_text);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -422,7 +621,13 @@ fn create_directory_tool(
     snapshot_before(&ws, &action);
 
     let result = create_directory(&ws, &relative_path);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -434,12 +639,21 @@ fn move_rename_tool(
     confirmed: bool,
 ) -> Result<(), String> {
     let ws = Workspace::new(&workspace_root)?;
-    let action = format!("move_rename: {} -> {}", from_relative_path, to_relative_path);
+    let action = format!(
+        "move_rename: {} -> {}",
+        from_relative_path, to_relative_path
+    );
     checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
     snapshot_before(&ws, &action);
 
     let result = move_rename(&ws, &from_relative_path, &to_relative_path);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -455,7 +669,13 @@ fn git_commit_tool(
     snapshot_before(&ws, &action);
 
     let result = git_commit(&ws, &message);
-    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -474,7 +694,13 @@ fn delete_file_tool(
     snapshot_before(&ws, &action);
 
     let result = delete_file(&ws, &relative_path, recursive);
-    log_action(&ws, &PermissionTier::Privileged, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Privileged,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -485,6 +711,11 @@ fn execute_command_tool(
     confirmed: bool,
 ) -> Result<CommandOutput, String> {
     let ws = Workspace::new(&workspace_root)?;
+    // Some capabilities have their own guarded tool; the shell is refused for them.
+    if let Some(reason) = tools::command_classifier::refused_reason(&command) {
+        log_action(&ws, &PermissionTier::Privileged, &format!("execute_command: {}", command), false, &reason);
+        return Err(reason.to_owned());
+    }
     let tier = classify_command_risk(&command);
     let action = format!("execute_command: {}", command);
     checkpoint(&tier, &action, confirmed)?;
@@ -493,7 +724,13 @@ fn execute_command_tool(
     }
 
     let result = execute_terminal_command(&ws, &command);
-    log_action(&ws, &tier, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &tier,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -505,14 +742,20 @@ fn restore_snapshot_tool(
 ) -> Result<(), String> {
     let ws = Workspace::new(&workspace_root)?;
     let action = format!("restore_snapshot: {}", commit_hash);
-        checkpoint(&PermissionTier::Privileged, &action, confirmed)?;
+    checkpoint(&PermissionTier::Privileged, &action, confirmed)?;
     // Save the CURRENT state first. Without this, any change made after the
     // last snapshot (e.g. the agent's final write) is wiped by the restore and
     // can never be brought back — so a restore itself would not be undoable.
     snapshot_before(&ws, &format!("before {}", action));
 
     let result = restore_snapshot(&ws, &commit_hash);
-    log_action(&ws, &PermissionTier::Privileged, &action, result.is_ok(), &format!("{:?}", result));
+    log_action(
+        &ws,
+        &PermissionTier::Privileged,
+        &action,
+        result.is_ok(),
+        &format!("{:?}", result),
+    );
     result
 }
 
@@ -528,6 +771,11 @@ fn start_command_tool(
     confirmed: bool,
 ) -> Result<u64, String> {
     let ws = Workspace::new(&workspace_root)?;
+    // Some capabilities have their own guarded tool; the shell is refused for them.
+    if let Some(reason) = tools::command_classifier::refused_reason(&command) {
+        log_action(&ws, &PermissionTier::Privileged, &format!("execute_command: {}", command), false, &reason);
+        return Err(reason.to_owned());
+    }
     let tier = classify_command_risk(&command);
     let action = format!("execute_command: {}", command);
     checkpoint(&tier, &action, confirmed)?; // still blocks synchronously for privileged commands
@@ -570,7 +818,10 @@ fn start_command_tool(
 }
 
 #[tauri::command]
-fn cancel_command_tool(running: tauri::State<Arc<RunningCommands>>, job_id: u64) -> Result<(), String> {
+fn cancel_command_tool(
+    running: tauri::State<Arc<RunningCommands>>,
+    job_id: u64,
+) -> Result<(), String> {
     running.cancel(job_id)
 }
 
@@ -582,7 +833,10 @@ fn backup_models(main: &str) -> Vec<String> {
     if list.trim().eq_ignore_ascii_case("none") {
         return Vec::new();
     }
-    list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != main).collect()
+    list.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != main)
+        .collect()
 }
 
 /// The Groq key: the one typed in the app if any, otherwise GROQ_API_KEY from
@@ -609,40 +863,58 @@ async fn run_agent_tool(
 ) -> Result<agent::AgentStepResult, String> {
     let messages: Vec<agent::model_client::ChatMessage> = serde_json::from_str(&messages_json)
         .map_err(|e| format!("messages_json was not valid: {}", e))?;
-    let api_key = pick_api_key(&api_key, std::env::var("GROQ_API_KEY").ok())?;
-    // Main model + backups that have their own daily quota (Groq limits are per model).
-    let client = agent::model_client::OpenAiCompatibleClient::groq(api_key, model.clone())
-        .with_fallbacks(backup_models(&model));
-    let outcome = agent::orchestrator::run_agent_loop(&client, &workspace_root, messages, resume_confirmed).await;
+    // "ollama:<model>" in the model box = a local model through Ollama on this PC:
+    // no API key, no quota, and nothing the agent reads leaves the computer.
+    let client = if let Some(local) = model.strip_prefix("ollama:") {
+        agent::model_client::OpenAiCompatibleClient::local_ollama(local.trim())
+    } else {
+        let api_key = pick_api_key(&api_key, std::env::var("GROQ_API_KEY").ok())?;
+        // Main model + backups that have their own daily quota (Groq limits are per model).
+        agent::model_client::OpenAiCompatibleClient::groq(api_key, model.clone())
+            .with_fallbacks(backup_models(&model))
+    };
+    let outcome =
+        agent::orchestrator::run_agent_loop(&client, &workspace_root, messages, resume_confirmed)
+            .await;
 
     Ok(match outcome {
-        agent::orchestrator::LoopOutcome::Done { messages, answer } => agent::AgentStepResult::Done { messages, answer },
-        agent::orchestrator::LoopOutcome::AwaitingConfirmation { messages, tool_name, arguments } => {
-            agent::AgentStepResult::AwaitingConfirmation { messages, tool_name, arguments }
+        agent::orchestrator::LoopOutcome::Done { messages, answer } => {
+            agent::AgentStepResult::Done { messages, answer }
         }
+        agent::orchestrator::LoopOutcome::AwaitingConfirmation {
+            messages,
+            tool_name,
+            arguments,
+        } => agent::AgentStepResult::AwaitingConfirmation {
+            messages,
+            tool_name,
+            arguments,
+        },
         agent::orchestrator::LoopOutcome::StoppedForSafety { messages, reason } => {
             agent::AgentStepResult::StoppedForSafety { messages, reason }
         }
-        agent::orchestrator::LoopOutcome::Error(message) => agent::AgentStepResult::Error { message },
+        agent::orchestrator::LoopOutcome::Error(message) => {
+            agent::AgentStepResult::Error { message }
+        }
     })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     dotenvy::dotenv().ok(); // loads .env from the current folder if present; harmless if it's missing
-    // dev builds: also src-tauri/.env by its real path, whatever folder the app was started from
+                            // dev builds: also src-tauri/.env by its real path, whatever folder the app was started from
     let _ = dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/.env"));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(RunningCommands::default()))
-                .setup(|app| {
+        .setup(|app| {
             // desktop app: send only the tools a goal needs (benchmark keeps all tools)
             agent::routing::set_enabled(true);
             // desktop app: check that files the agent claims to have created exist (benchmark: off)
             agent::claims::set_enabled(true);
-                        // desktop app: the agent keeps a live to-do list and can't quietly skip items (benchmark: off)
+            // desktop app: the agent keeps a live to-do list and can't quietly skip items (benchmark: off)
             agent::checklist::set_enabled(true);
             // live agent events -> frontend ("agent-event"), for the Live Run view
             let handle = app.handle().clone();
@@ -677,6 +949,13 @@ pub fn run() {
             merge_pdfs_tool,
             extract_pdf_pages_tool,
             open_in_default_app_tool,
+            system_info_tool,
+            list_processes_tool,
+            list_windows_tool,
+            close_app_tool,
+            clipboard_read_tool,
+            clipboard_write_tool,
+            take_screenshot_tool,
             git_commit_tool,
             get_audit_log_tool,
             list_snapshots_tool,
@@ -713,18 +992,26 @@ mod undo_tests {
 
         // undo the run
         restore_snapshot_tool(root.clone(), before_run, true).unwrap();
-        assert!(!dir.join("a.txt").exists(), "undo removes the file the run created");
+        assert!(
+            !dir.join("a.txt").exists(),
+            "undo removes the file the run created"
+        );
 
         // redo: the state just before the restore must still exist
-        let redo = list_snapshots(&ws).unwrap().into_iter()
+        let redo = list_snapshots(&ws)
+            .unwrap()
+            .into_iter()
             .find(|s| s.message.starts_with("before restore_snapshot"))
             .expect("restore must snapshot the current state first");
         restore_snapshot_tool(root.clone(), redo.commit_hash, true).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v2", "the run's final write is recoverable");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "v2",
+            "the run's final write is recoverable"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-
 
 #[cfg(test)]
 mod api_key_tests {
@@ -732,11 +1019,24 @@ mod api_key_tests {
 
     #[test]
     fn typed_key_wins_then_env_then_clear_error() {
-        assert_eq!(pick_api_key("  gsk_typed ", Some("gsk_env".into())).unwrap(), "gsk_typed");
-        assert_eq!(pick_api_key("", Some("gsk_env\n".into())).unwrap(), "gsk_env", "blank box -> .env key");
-        assert_eq!(pick_api_key("   ", Some("gsk_env".into())).unwrap(), "gsk_env");
+        assert_eq!(
+            pick_api_key("  gsk_typed ", Some("gsk_env".into())).unwrap(),
+            "gsk_typed"
+        );
+        assert_eq!(
+            pick_api_key("", Some("gsk_env\n".into())).unwrap(),
+            "gsk_env",
+            "blank box -> .env key"
+        );
+        assert_eq!(
+            pick_api_key("   ", Some("gsk_env".into())).unwrap(),
+            "gsk_env"
+        );
         let e = pick_api_key("", None).unwrap_err();
         assert!(e.contains("GROQ_API_KEY") && e.contains(".env"), "{}", e);
-        assert!(pick_api_key("", Some("  ".into())).is_err(), "empty value in .env is not a key");
+        assert!(
+            pick_api_key("", Some("  ".into())).is_err(),
+            "empty value in .env is not a key"
+        );
     }
 }

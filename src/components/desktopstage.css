@@ -1,0 +1,54 @@
+/* Desktop tool visuals in the Live view (DesktopStage.tsx). Uses the Live view's --lr-* colours. */
+.dk-panel { align-self: stretch; background: var(--lr-panel, #15122a); border: 1px solid var(--lr-line, #2c2650); border-radius: 12px; overflow: hidden;
+  animation: dk-in 0.3s ease-out; }
+.dk-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 14px; font-weight: 600; font-size: 13.5px;
+  border-bottom: 1px solid var(--lr-line, #2c2650); background: rgba(56, 189, 248, 0.06); }
+.dk-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.dk-muted { color: var(--lr-muted, #8f89b3); font-weight: 400; font-size: 12px; }
+.dk-ok { color: #86efac; font-size: 12.5px; font-weight: 500; }
+.dk-sub { padding: 10px 14px 0; font-size: 12px; color: var(--lr-muted, #8f89b3); }
+.dk-in { animation: dk-in 0.3s ease-out both; }
+
+/* meters */
+.dk-meter-top { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; margin-bottom: 5px; }
+.dk-bar { height: 8px; border-radius: 99px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+.dk-bar > div { height: 100%; border-radius: 99px; background: #38bdf8; animation: dk-grow 0.7s ease-out; transform-origin: left; }
+.dk-bar > .dk-warm { background: #fbbf24; }
+.dk-bar > .dk-hot { background: #f87171; }
+.dk-facts { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; margin-top: 2px; }
+.dk-hot-text { color: #fca5a5; font-size: 12px; }
+
+/* processes */
+.dk-proc { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr) 64px; align-items: center; gap: 10px; font-size: 13px; }
+.dk-proc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dk-proc-title { font-size: 11.5px; color: var(--lr-muted, #8f89b3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dk-proc-bar { height: 10px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); overflow: hidden; }
+.dk-proc-bar > div { height: 100%; background: linear-gradient(90deg, #38bdf8, #818cf8); border-radius: 4px; animation: dk-grow 0.6s ease-out; transform-origin: left; }
+.dk-proc-mb { text-align: right; font: 12px ui-monospace, Consolas, monospace; }
+
+/* windows */
+.dk-wins { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; padding: 12px; }
+.dk-win { border: 1px solid var(--lr-line, #2c2650); border-radius: 8px; background: rgba(255, 255, 255, 0.03); padding: 0 10px 9px; overflow: hidden; }
+.dk-win-bar { display: flex; gap: 4px; justify-content: flex-end; margin: 0 -10px 8px; padding: 5px 8px; background: rgba(255, 255, 255, 0.05); }
+.dk-win-bar span { width: 8px; height: 8px; border-radius: 2px; background: rgba(255, 255, 255, 0.25); }
+.dk-win-title { font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 2px; }
+
+/* clipboard / screenshot */
+.dk-clip { margin: 12px 14px 14px; padding: 10px 12px; border-radius: 8px; background: rgba(255, 255, 255, 0.04); border: 1px dashed var(--lr-line, #2c2650); }
+.dk-clip pre, .dk-pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.5 ui-monospace, Consolas, monospace; }
+.dk-pre { margin: 8px 14px 14px; max-height: 320px; overflow: auto; padding: 10px 12px; border-radius: 8px; background: rgba(0, 0, 0, 0.25); }
+.dk-flash { height: 3px; background: #fff; animation: dk-flash 0.6s ease-out forwards; }
+
+/* banners / simple */
+.dk-banner { margin: 10px 14px 12px; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--lr-line, #2c2650); }
+.dk-wait { background: rgba(245, 158, 11, 0.12); border-color: rgba(245, 158, 11, 0.45); color: #fcd34d; }
+.dk-error { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.45); color: #fca5a5; white-space: pre-wrap; }
+.dk-simple { align-self: center; display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 36px; text-align: center; max-width: 520px; }
+.dk-simple .dk-banner { margin: 4px 0 0; }
+.dk-simple-icon { font-size: 40px; animation: dk-in 0.4s ease-out; }
+.dk-poof { animation: dk-poof 0.6s ease-in forwards; }
+
+@keyframes dk-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes dk-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes dk-flash { 0% { opacity: 1; box-shadow: 0 0 40px 20px rgba(255, 255, 255, 0.6); } 100% { opacity: 0; box-shadow: none; } }
+@keyframes dk-poof { to { opacity: 0.25; transform: scale(0.6); filter: grayscale(1); } }

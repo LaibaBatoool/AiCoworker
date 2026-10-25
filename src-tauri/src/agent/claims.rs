@@ -165,11 +165,29 @@ pub fn missing_claimed_files(workspace_root: &str, answer: &str) -> Vec<String> 
         .collect()
 }
 
+/// Drops names the agent is REPORTING rather than claiming to have made: a
+/// name that appears in a tool result of this run (screen text, a file it
+/// read, an email) is something it saw. Finding 41: a screenshot's OCR showed
+/// "target/debug/aicoworker.exe", the answer described the screen, and the
+/// check sent the agent hunting for a file it never claimed to create.
+pub fn not_seen_in_tool_output(missing: Vec<String>, tool_outputs: &[&str]) -> Vec<String> {
+    let seen: Vec<String> = tool_outputs.iter().map(|t| t.to_lowercase().replace('\\', "/")).collect();
+    missing
+        .into_iter()
+        .filter(|f| {
+            let f = f.to_lowercase();
+            let base = f.rsplit('/').next().unwrap_or(&f).to_string();
+            !seen.iter().any(|t| t.contains(&f) || t.contains(&base))
+        })
+        .collect()
+}
+
 /// The message sent back to the model when claimed files are missing.
 pub fn feedback(missing: &[String]) -> String {
     format!(
         "{} Your answer says these files were created or written, but they do NOT exist in the workspace: {}. \
-         Do the missing work now with your tools, or correct your answer. Do not claim work you did not do.",
+         Do the missing work now with your tools, or correct your answer. Do not claim work you did not do. \
+         Then give your COMPLETE final answer again: the user only sees your last answer.",
         MARKER,
         missing.join(", ")
     )
@@ -210,5 +228,12 @@ mod tests {
         assert_eq!(missing_claimed_files(root, "I wrote count.txt and notes.txt."), vec!["count.txt"]);
         assert!(feedback(&["count.txt".into()]).starts_with(MARKER));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn names_seen_in_tool_output_are_reports_not_claims() {
+        let missing = vec!["target/debug/aicoworker.exe".to_string(), "report.txt".to_string()];
+        let tools = ["{\"screen_text\":\"Finished dev profile\\nRunning `target\\\\debug\\\\aicoworker.exe`\"}", "Wrote 3 files"];
+        assert_eq!(not_seen_in_tool_output(missing, &tools), vec!["report.txt".to_string()]);
     }
 }

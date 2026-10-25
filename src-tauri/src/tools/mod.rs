@@ -21,3 +21,4 @@ pub mod archive;
 pub mod read_spreadsheet;
 pub mod pdf_pages;
 pub mod open_file;
+pub mod desktop;

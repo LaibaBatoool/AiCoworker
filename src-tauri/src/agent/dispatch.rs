@@ -117,6 +117,13 @@ pub fn dispatch_tool_call(
         )
         .and_then(to_value),
         "open_in_default_app" => crate::open_in_default_app_tool(ws, get_str(args, "relative_path")?, confirmed).and_then(to_value),
+        "system_info" => crate::system_info_tool(ws),
+        "list_processes" => crate::list_processes_tool(ws, get_u32(args, "limit", 15)),
+        "list_windows" => crate::list_windows_tool(ws).and_then(to_value),
+        "close_app" => crate::close_app_tool(ws, get_str(args, "app")?, get_bool(args, "force", false), confirmed).and_then(to_value),
+        "clipboard_read" => crate::clipboard_read_tool(ws, confirmed).and_then(to_value),
+        "clipboard_write" => crate::clipboard_write_tool(ws, get_str(args, "text")?, confirmed).and_then(to_value),
+        "take_screenshot" => crate::take_screenshot_tool(ws, get_u32(args, "delay_seconds", 3), confirmed).and_then(to_value),
         "fetch_url" => crate::fetch_url_tool(ws, get_str(args, "url")?, confirmed).and_then(to_value),
         "list_snapshots" => crate::list_snapshots_tool(ws).and_then(to_value),
         "write_file" => crate::write_file_tool(ws, get_str(args, "relative_path")?, get_str(args, "content")?, confirmed).and_then(to_value),

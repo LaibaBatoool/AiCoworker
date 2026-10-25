@@ -246,6 +246,13 @@ async fn run_agent_loop_inner(
                         return LoopOutcome::Done { messages, answer };
                     }
                 }
+                                // Items the agent said it cannot do are always shown to the user.
+                let answer = if crate::agent::checklist::enabled() {
+                    let skipped = crate::agent::checklist::skipped_items(&messages);
+                    if skipped.is_empty() { answer } else { format!("{}\n\n{}", answer, crate::agent::checklist::skipped_note(&skipped)) }
+                } else {
+                    answer
+                };
                 // Claim check (findings 3, 14, 21, 24): files the answer says were
                 // created must exist. One retry, then the user is told the truth.
                 if crate::agent::claims::enabled() {
@@ -253,7 +260,8 @@ async fn run_agent_loop_inner(
                     let already_checked = messages.iter().any(|m| {
                         m.role == "user" && m.content.as_deref().map(|c| c.starts_with(claims::MARKER)).unwrap_or(false)
                     });
-                    let missing = claims::missing_claimed_files(workspace_root, &answer);
+                    let tool_outputs: Vec<&str> = messages.iter().filter(|m| m.role == "tool").filter_map(|m| m.content.as_deref()).collect();
+                    let missing = claims::not_seen_in_tool_output(claims::missing_claimed_files(workspace_root, &answer), &tool_outputs);
                     let card = format!("claim-check-{}", step + 1);
                     if !missing.is_empty() {
                         events::emit(AgentEvent::ToolStarted {
@@ -631,7 +639,9 @@ fn tool_result_message(call: &ToolCallRequest, result: &Result<Value, String>) -
 
 /// Tool results that come from OUTSIDE the user's machine/workspace.
 fn is_external_source(tool: &str) -> bool {
-    tool.starts_with("mcp__") || tool == "fetch_url"
+    // Desktop tools return text anyone can control: window titles (a web
+    // page sets its own), what the user copied, what is on the screen.
+    tool.starts_with("mcp__") || matches!(tool, "fetch_url" | "list_windows" | "list_processes" | "clipboard_read" | "take_screenshot")
 }
 
 /// "Spotlighting": wraps external tool output in markers so the model can
@@ -671,6 +681,8 @@ mod spotlight_tests {
     fn wraps_only_external_sources() {
         assert!(is_external_source("mcp__bench__get_news"));
         assert!(is_external_source("fetch_url"));
+        assert!(is_external_source("take_screenshot") && is_external_source("clipboard_read") && is_external_source("list_windows"));
+        assert!(!is_external_source("system_info") && !is_external_source("clipboard_write"));
         assert!(!is_external_source("read_file"));
         assert!(!is_external_source("write_file"));
     }

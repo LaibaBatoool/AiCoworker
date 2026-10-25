@@ -36,6 +36,38 @@ use crate::permission::PermissionTier;
 ///     package registries.
 ///   Real shell confinement needs an OS sandbox; this is best-effort
 ///   pattern matching.
+/// Capabilities that have their own guarded tool are REFUSED in the shell, not
+/// just sent for approval, so the shell can't be a way around that tool's
+/// checks. Finding 40: asked to "close svchost", the agent knew close_app
+/// would refuse and ran `taskkill /F /PID ...` instead; only the user's
+/// "Decline" stopped it.
+const KILLERS_ANYWHERE: &[&str] = &["taskkill", "tskill", "stop-process", "pskill"];
+const KILLERS_AS_COMMAND: &[&str] = &["kill", "spps", "killall", "pkill"];
+
+pub fn refused_reason(command: &str) -> Option<String> {
+    let n = normalise(command);
+    let mut found: Option<String> = all_words(&n).iter().map(|w| program_name(w).to_string()).find(|p| KILLERS_ANYWHERE.contains(&p.as_str()));
+    if found.is_none() {
+        found = segments(&n)
+            .iter()
+            .filter_map(|seg| words(seg).into_iter().next())
+            .map(|w| program_name(&w).to_string())
+            .find(|p| KILLERS_AS_COMMAND.contains(&p.as_str()));
+    }
+    if found.is_none() {
+        let w = all_words(&n);
+        if w.iter().any(|x| program_name(x) == "wmic") && w.iter().any(|x| x == "terminate" || x == "delete") {
+            found = Some("wmic".to_string());
+        }
+    }
+    found.map(|p| {
+        format!(
+            "Refused: ending processes from the terminal ('{}') is not allowed. Use the close_app tool: it closes apps that have an open window and never Windows or background processes.",
+            p
+        )
+    })
+}
+
 pub fn classify_command_risk(command: &str) -> PermissionTier {
     if is_privileged(command) {
         return PermissionTier::Privileged;
@@ -494,5 +526,29 @@ mod tests {
             ],
             Mutating,
         );
+    }
+}
+
+#[cfg(test)]
+mod refused_tests {
+    use super::*;
+
+    #[test]
+    fn process_killing_goes_through_close_app_only() {
+        for c in [
+            "taskkill /F /PID 1224 /PID 1384",
+            "TASKKILL.EXE /im svchost.exe",
+            "t^askkill /im notepad.exe",
+            "cd . && taskkill /im x.exe",
+            "powershell -c \"Get-Process svchost | Stop-Process -Force\"",
+            "Stop-Process -Name svchost",
+            "kill 1234",
+            "wmic process where name='svchost.exe' call terminate",
+        ] {
+            assert!(refused_reason(c).map(|r| r.contains("close_app")).unwrap_or(false), "should refuse: {}", c);
+        }
+        for c in ["dir", "findstr kill notes.txt", "git log --grep kill", "echo skill > a.txt", "npm test"] {
+            assert!(refused_reason(c).is_none(), "should not refuse: {}", c);
+        }
     }
 }

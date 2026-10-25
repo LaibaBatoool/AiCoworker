@@ -49,6 +49,10 @@ const GROUPS: &[(&str, &str, &[&str])] = &[
     ("archive", "zip archives", &["zip", "archive", "compress", "unzip", "extract", "tar", "7z"]),
     ("git", "git history, commits, snapshots and undo", &["git", "commit", "diff", "repo", "repository", "snapshot", "snapshots", "undo", "restore", "revert"]),
     ("apps", "open a file in its default app", &["open it", "open the", "open in", "launch", "show me", "preview"]),
+        ("desktop", "this computer: system status (RAM, disk, battery), running apps and windows, close an app, clipboard, screenshot", &[
+        "screen", "screenshot", "clipboard", "copied", "paste", "window", "windows", "running", "process", "processes",
+        "close", "quit", "ram", "cpu", "disk space", "storage", "battery", "slow", "laptop", "computer", "my pc", "system info",
+    ]),
     ("connections", "external tools from connected MCP servers", &["remember", "recall", "forget", "memory", "told you", "mcp", "tool"]),
 ];
 
@@ -63,6 +67,7 @@ pub fn group_of(tool: &str) -> &'static str {
         "extract_archive" | "create_archive" => "archive",
         "git_diff" | "git_status" | "git_log" | "git_commit" | "list_snapshots" | "restore_snapshot" => "git",
         "open_in_default_app" => "apps",
+        "system_info" | "list_processes" | "list_windows" | "close_app" | "clipboard_read" | "clipboard_write" | "take_screenshot" => "desktop",
         _ => "core",
     }
 }
@@ -279,7 +284,7 @@ mod tests {
         assert_eq!(active_groups(&all(), &msgs).into_iter().collect::<Vec<_>>(), vec!["core"]);
     }
 
-        #[test]
+    #[test]
     fn user_keywords_load_mcp_tools() {
         // finding 36: "to-do" is in no tool name, so list_tasks was never loaded
         let tools: Vec<ToolSchema> = all().into_iter().chain([t("mcp__notes__list_tasks"), t("mcp__notes__add_task")]).collect();

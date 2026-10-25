@@ -300,3 +300,8 @@
 
 /* ---- 📄 Export report ---- */
 .lr-report { align-self: stretch; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+
+/* checklist items the agent could not do (shown, never hidden) */
+.lr-checklist li.skipped { color: var(--lr-muted, #8f89b3); }
+.lr-checklist li.skipped .lr-check { border-color: #f59e0b; color: #f59e0b; }
+.lr-skip-why { color: #fcd34d; font-size: 0.9em; }

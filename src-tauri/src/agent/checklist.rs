@@ -49,7 +49,9 @@ pub fn schema() -> ToolSchema {
             thing to do (several files, rows, codes or steps), call this FIRST with one item per concrete thing \
             (e.g. one item per file to rename). After the tool call that completes an item, call it again with \
             the full list and that item's done set to true. Send the whole list every time. Before your final \
-            answer every item must be done; the backend checks this."
+            answer every item must be done; the backend checks this. Only if an item truly CANNOT be done (the backend \
+            refused it, no tool can do it, or the user declined), set its skipped to the short reason instead of \
+            done; the user is shown every skipped item. Never skip work you could do."
             .to_string(),
         tier: "safe".to_string(),
         parameters: json!({
@@ -61,7 +63,8 @@ pub fn schema() -> ToolSchema {
                         "type": "object",
                         "properties": {
                             "text": { "type": "string", "description": "One concrete thing to do" },
-                            "done": { "type": "boolean" }
+                            "done": { "type": "boolean" },
+                            "skipped": { "type": "string", "description": "Only for an item that cannot be done: the reason. Leave out otherwise." }
                         },
                         "required": ["text", "done"]
                     }
@@ -76,6 +79,15 @@ pub fn schema() -> ToolSchema {
 pub struct Item {
     pub text: String,
     pub done: bool,
+    /// Reason the item cannot be done (refused, impossible, declined). Not "done":
+    /// it closes the item for the gate, but the user is always shown it.
+    pub skipped: Option<String>,
+}
+
+impl Item {
+    fn is_open(&self) -> bool {
+        !self.done && self.skipped.is_none()
+    }
 }
 
 fn parse(args: &Value) -> Result<Vec<Item>, String> {
@@ -93,7 +105,12 @@ fn parse(args: &Value) -> Result<Vec<Item>, String> {
                 return Err("Every item needs a non-empty 'text'.".to_string());
             }
             let done = v.get("done").and_then(|d| d.as_bool()).unwrap_or(false);
-            Ok(Item { text, done })
+            let skipped = v
+                .get("skipped")
+                .and_then(|r| r.as_str())
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty() && !done);
+            Ok(Item { text, done, skipped })
         })
         .collect()
 }
@@ -102,11 +119,13 @@ fn parse(args: &Value) -> Result<Vec<Item>, String> {
 pub fn handle(args: &Value) -> Result<Value, String> {
     let items = parse(args)?;
     let done = items.iter().filter(|i| i.done).count();
-    let open: Vec<&str> = items.iter().filter(|i| !i.done).map(|i| i.text.as_str()).collect();
+    let skipped = items.iter().filter(|i| i.skipped.is_some()).count();
+    let open: Vec<&str> = items.iter().filter(|i| i.is_open()).map(|i| i.text.as_str()).collect();
+    let skip_note = if skipped > 0 { format!(" ({} skipped as not doable; the user will be told)", skipped) } else { String::new() };
     Ok(Value::String(if open.is_empty() {
-        format!("Checklist saved: all {} items done.", items.len())
+        format!("Checklist saved: no items open, {}/{} done{}.", done, items.len(), skip_note)
     } else {
-        format!("Checklist saved: {}/{} done. Still open: {}", done, items.len(), open.join("; "))
+        format!("Checklist saved: {}/{} done{}. Still open: {}", done, items.len(), skip_note, open.join("; "))
     }))
 }
 
@@ -131,14 +150,31 @@ pub fn current(messages: &[ChatMessage]) -> Option<Vec<Item>> {
 /// Items still open (empty if there is no checklist or all are done).
 pub fn open_items(messages: &[ChatMessage]) -> Vec<String> {
     current(messages)
-        .map(|items| items.into_iter().filter(|i| !i.done).map(|i| i.text).collect())
+        .map(|items| items.into_iter().filter(|i| i.is_open()).map(|i| i.text).collect())
         .unwrap_or_default()
+}
+
+/// Items the agent said it cannot do, with its reason. Always shown to the user,
+/// so "skipped" can never hide unfinished work quietly.
+pub fn skipped_items(messages: &[ChatMessage]) -> Vec<(String, String)> {
+    current(messages)
+        .map(|items| items.into_iter().filter_map(|i| i.skipped.map(|r| (i.text, r))).collect())
+        .unwrap_or_default()
+}
+
+pub fn skipped_note(skipped: &[(String, String)]) -> String {
+    format!(
+        "ℹ Backend note: the agent marked {} as not doable: {}.",
+        if skipped.len() == 1 { "1 item".to_string() } else { format!("{} items", skipped.len()) },
+        skipped.iter().map(|(t, r)| format!("{} ({})", t, r)).collect::<Vec<_>>().join("; ")
+    )
 }
 
 pub fn feedback(open: &[String]) -> String {
     format!(
-        "{} Your checklist still has open items: {}. Finish them now with your tools and tick them, \
-         or say clearly in your answer which ones you did not do and why.",
+        "{} Your checklist still has open items: {}. Finish them now with your tools and tick them. \
+         If an item truly cannot be done (the backend refused it, no tool can do it, or the user declined), call \
+         update_checklist again with that item's skipped set to the reason; never skip work you could do.",
         MARKER,
         open.join("; ")
     )
@@ -309,6 +345,8 @@ mod tests {
         assert!(handle(&json!({"items": []})).is_err());
         assert!(handle(&json!({"items": [{"text": "  ", "done": false}]})).is_err());
         assert!(handle(&json!({})).is_err());
+        let sk = handle(&json!({"items": [{"text": "a", "done": true}, {"text": "b", "done": false, "skipped": "backend refused"}]})).unwrap();
+        assert!(sk.as_str().unwrap().contains("no items open") && sk.as_str().unwrap().contains("1 skipped"));
         let ok = handle(&json!({"items": [{"text": "a", "done": true}, {"text": "b", "done": false}]})).unwrap();
         assert!(ok.as_str().unwrap().contains("1/2 done") && ok.as_str().unwrap().contains("b"));
         // a broken later call doesn't erase the last good list
@@ -391,5 +429,16 @@ mod tests {
         // simple goal, 1 file -> nothing
         let small = vec![user("make notes.txt"), tool("write_file", r#"{"relative_path":"notes.txt","content":"hi"}"#)];
         assert!(needs_plan_check(&small).is_none());
+    }
+
+    #[test]
+    fn skipped_items_close_the_gate_but_are_reported() {
+        let m = vec![call(r#"{"items":[{"text":"close notepad","done":true},{"text":"close svchost","done":false,"skipped":"system process, refused"},{"text":"x","done":false,"skipped":"  "}]}"#)];
+        assert_eq!(open_items(&m), vec!["x".to_string()], "blank reason = still open");
+        let sk = skipped_items(&m);
+        assert_eq!(sk, vec![("close svchost".to_string(), "system process, refused".to_string())]);
+        assert!(skipped_note(&sk).contains("close svchost (system process, refused)"));
+        let both = vec![call(r#"{"items":[{"text":"a","done":true,"skipped":"why"}]}"#)];
+        assert!(skipped_items(&both).is_empty(), "done wins over skipped");
     }
 }

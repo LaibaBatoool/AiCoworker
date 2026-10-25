@@ -12,6 +12,7 @@ import Markdown, { markdownToHtml, MARKDOWN_REPORT_CSS } from "./Markdown";
 import EmailStage, { emailTool, describeEmail, emailIcon } from "./EmailStage";
 import CalendarStage, { calTool, describeCal, calIcon } from "./CalendarStage";
 import NotesStage, { notesTool, describeNotes, notesIcon } from "./NotesStage";
+import DesktopStage, { DESKTOP_TOOLS, describeDesktop, desktopIcon } from "./DesktopStage";
 
 // ---------- types ----------
 type AgentEvent =
@@ -135,6 +136,7 @@ function describe(name: string, a: any): string {
     case "claim_check": return Array.isArray(a?.missing) && a.missing.length ? `Checking claims: ${a.missing.join(", ")} missing` : "Checking the agent's claims";
 
     default:
+      if (DESKTOP_TOOLS.includes(name)) return describeDesktop(name, a);
       if (emailTool(name)) return describeEmail(emailTool(name)!, a);
       if (calTool(name)) return describeCal(calTool(name)!, a);
                if (notesTool(name)) return describeNotes(notesTool(name)!, a);
@@ -147,6 +149,7 @@ function describe(name: string, a: any): string {
 }
 
 function icon(name: string): string {
+  if (DESKTOP_TOOLS.includes(name)) return desktopIcon(name);
   if (emailTool(name)) return emailIcon(emailTool(name)!);
   if (calTool(name)) return calIcon(calTool(name)!);
        if (notesTool(name)) return notesIcon(notesTool(name)!);
@@ -343,8 +346,9 @@ function GenericStage({ card }: { card: Card }) {
 }
 // the agent's to-do list (update_checklist): pinned on top of the steps, and on the stage
 function Checklist({ items, pinned }: { items: any; pinned?: boolean }) {
-  const list: { text: string; done: boolean }[] = Array.isArray(items) ? items.filter((x: any) => x && typeof x.text === "string") : [];
-  const done = list.filter((x) => x.done).length;
+  const list: { text: string; done: boolean; skipped?: string }[] = Array.isArray(items) ? items.filter((x: any) => x && typeof x.text === "string") : [];
+  const skip = (x: { done: boolean; skipped?: string }) => !x.done && typeof x.skipped === "string" && x.skipped.trim() !== "";
+  const done = list.filter((x) => x.done || skip(x)).length;
   return (
     <div className={`lr-checklist ${pinned ? "lr-checklist-pinned" : ""}`}>
       <div className="lr-checklist-head">
@@ -354,7 +358,10 @@ function Checklist({ items, pinned }: { items: any; pinned?: boolean }) {
       <div className="lr-checklist-bar"><div style={{ width: `${list.length ? (done / list.length) * 100 : 0}%` }} /></div>
       <ul>
         {list.map((x, i) => (
-          <li key={i} className={x.done ? "done" : ""}><span className="lr-check">{x.done ? "✓" : ""}</span><span>{x.text}</span></li>
+          <li key={i} className={x.done ? "done" : skip(x) ? "skipped" : ""}>
+            <span className="lr-check">{x.done ? "✓" : skip(x) ? "⊘" : ""}</span>
+            <span>{x.text}{skip(x) && <span className="lr-skip-why"> — not done: {x.skipped}</span>}</span>
+          </li>
         ))}
       </ul>
     </div>
@@ -390,6 +397,7 @@ function Stage({ card }: { card: Card }) {
     case "create_directory":
       return <div className="lr-delete lr-pop"><div className="lr-big-icon">📁</div><div>{norm(a.relative_path)}</div></div>;
     default:
+      if (DESKTOP_TOOLS.includes(card.name)) return <DesktopStage card={card} />;
       if (emailTool(card.name)) return <EmailStage card={card} />;
       if (calTool(card.name)) return <CalendarStage card={card} />;
                if (notesTool(card.name)) return <NotesStage card={card} />;
