@@ -124,6 +124,28 @@ pub fn dispatch_tool_call(
         "clipboard_read" => crate::clipboard_read_tool(ws, confirmed).and_then(to_value),
         "clipboard_write" => crate::clipboard_write_tool(ws, get_str(args, "text")?, confirmed).and_then(to_value),
         "take_screenshot" => crate::take_screenshot_tool(ws, get_u32(args, "delay_seconds", 3), confirmed).and_then(to_value),
+        "image_info" => crate::image_info_tool(ws, get_str(args, "relative_path")?).and_then(to_value),
+        "resize_image" => crate::resize_image_tool(
+            ws,
+            get_str(args, "relative_path")?,
+            args.get("max_width").and_then(|v| v.as_u64()).map(|n| n as u32),
+            args.get("max_height").and_then(|v| v.as_u64()).map(|n| n as u32),
+            args.get("percent").and_then(|v| v.as_u64()).map(|n| n as u32),
+            get_opt_str(args, "format"),
+            args.get("quality").and_then(|v| v.as_u64()).map(|n| n as u32),
+            get_opt_str(args, "output_folder"),
+            confirmed,
+        )
+        .and_then(to_value),
+        "organize_photos" => crate::organize_photos_tool(
+            ws,
+            get_str(args, "relative_path")?,
+            get_opt_str(args, "by").unwrap_or_else(|| "month".to_string()),
+            get_bool(args, "dry_run", false),
+            confirmed,
+        )
+        .and_then(to_value),
+        "remove_photo_location" => crate::remove_photo_location_tool(ws, get_str(args, "relative_path")?, confirmed).and_then(to_value),
         "fetch_url" => crate::fetch_url_tool(ws, get_str(args, "url")?, confirmed).and_then(to_value),
         "list_snapshots" => crate::list_snapshots_tool(ws).and_then(to_value),
         "write_file" => crate::write_file_tool(ws, get_str(args, "relative_path")?, get_str(args, "content")?, confirmed).and_then(to_value),

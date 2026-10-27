@@ -13,6 +13,7 @@ import EmailStage, { emailTool, describeEmail, emailIcon } from "./EmailStage";
 import CalendarStage, { calTool, describeCal, calIcon } from "./CalendarStage";
 import NotesStage, { notesTool, describeNotes, notesIcon } from "./NotesStage";
 import DesktopStage, { DESKTOP_TOOLS, describeDesktop, desktopIcon } from "./DesktopStage";
+import ImageStage, { IMAGE_TOOLS, describeImage, imageIcon } from "./ImageStage";
 
 // ---------- types ----------
 type AgentEvent =
@@ -137,6 +138,7 @@ function describe(name: string, a: any): string {
 
     default:
       if (DESKTOP_TOOLS.includes(name)) return describeDesktop(name, a);
+      if (IMAGE_TOOLS.includes(name)) return describeImage(name, a);
       if (emailTool(name)) return describeEmail(emailTool(name)!, a);
       if (calTool(name)) return describeCal(calTool(name)!, a);
                if (notesTool(name)) return describeNotes(notesTool(name)!, a);
@@ -150,6 +152,7 @@ function describe(name: string, a: any): string {
 
 function icon(name: string): string {
   if (DESKTOP_TOOLS.includes(name)) return desktopIcon(name);
+  if (IMAGE_TOOLS.includes(name)) return imageIcon(name);
   if (emailTool(name)) return emailIcon(emailTool(name)!);
   if (calTool(name)) return calIcon(calTool(name)!);
        if (notesTool(name)) return notesIcon(notesTool(name)!);
@@ -368,7 +371,7 @@ function Checklist({ items, pinned }: { items: any; pinned?: boolean }) {
   );
 }
 
-function Stage({ card }: { card: Card }) {
+function Stage({ card, root }: { card: Card; root: string }) {
   const a = card.args ?? {};
   switch (card.name) {
     case "update_checklist": return <Checklist items={a.items} />;
@@ -398,6 +401,7 @@ function Stage({ card }: { card: Card }) {
       return <div className="lr-delete lr-pop"><div className="lr-big-icon">📁</div><div>{norm(a.relative_path)}</div></div>;
     default:
       if (DESKTOP_TOOLS.includes(card.name)) return <DesktopStage card={card} />;
+      if (IMAGE_TOOLS.includes(card.name)) return <ImageStage card={card} workspaceRoot={root} />;
       if (emailTool(card.name)) return <EmailStage card={card} />;
       if (calTool(card.name)) return <CalendarStage card={card} />;
                if (notesTool(card.name)) return <NotesStage card={card} />;
@@ -704,8 +708,8 @@ export default function LiveRun(props: Props) {
         break;
       case "tree": {
         const m = eventToTree(e);
-        if (e.baseline) setBaseline(m);
-        setCurrent(m);
+        if (e.baseline) { setBaseline(m); setCurrent((c) => (c.size ? c : m)); }
+        else setCurrent(m);
         break;
       }
       case "decision": {
@@ -721,9 +725,12 @@ export default function LiveRun(props: Props) {
     if (!workspaceRoot || modeRef.current === "replay") return;
     const seq = ++scanSeq.current;
     const m = await scanWorkspace(workspaceRoot);
+    // The "before" picture must never be dropped: when the backend emits an event
+    // right at the start (e.g. "Asking for a plan first"), a newer scan used to
+    // cancel this one and every file then showed up as "new".
+    if (asBaseline) { record(treeToEvent(m, true)); setBaseline(m); }
     if (seq !== scanSeq.current) return; // a newer scan started
-    record(treeToEvent(m, asBaseline));
-    if (asBaseline) setBaseline(m);
+    if (!asBaseline) record(treeToEvent(m, false));
     setCurrent(m);
   };
 
@@ -1077,7 +1084,7 @@ export default function LiveRun(props: Props) {
                     <span>{icon(activeCard.name)} {describe(activeCard.name, activeCard.args)}</span>
                     <span className={`lr-tier lr-tier-${activeCard.tier}`}>{TIER_LABEL[activeCard.tier] ?? activeCard.tier}</span>
                   </div>
-                  <Stage card={activeCard} />
+                  <Stage card={activeCard} root={isReplay ? replay.workspace : workspaceRoot} />
                   {activeCard.status === "waiting" && !isReplay && pendingConfirmation && (
                     <div className="lr-approval">
                       <div><b>AI CoWorker wants to do something that needs your OK.</b><br />The backend blocked it until you decide.</div>

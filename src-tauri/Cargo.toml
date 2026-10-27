@@ -24,6 +24,7 @@ tesseract = "0.15.2"
 zip = "8.6.0"
 lopdf = "0.45.0"
 image = "0.25.10"
+kamadak-exif = "0.6"
 docx-rs = "0.4.22"
 rust_xlsxwriter = "0.79"
 calamine = "0.36"
@@ -35,6 +36,25 @@ dotenvy = "0.15"
 shared_child = "1"
 
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# Dev builds (npm run tauri dev): optimise only the pure-Rust picture libraries.
+# Decoding/resizing a 12 MP photo took ~20 s unoptimised. NOT "*": that also
+# rebuilds leptonica-sys/tesseract-sys, whose build scripts need the MSVC
+# developer environment (fails with "vcruntime.h not found").
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.zune-core]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.image-webp]
+opt-level = 3
+[profile.dev.package.moxcms]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

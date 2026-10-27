@@ -53,6 +53,10 @@ const GROUPS: &[(&str, &str, &[&str])] = &[
         "screen", "screenshot", "clipboard", "copied", "paste", "window", "windows", "running", "process", "processes",
         "close", "quit", "ram", "cpu", "disk space", "storage", "battery", "slow", "laptop", "computer", "my pc", "system info",
     ]),
+    ("images", "pictures: image info (size, date taken, GPS location), resize/convert copies, sort photos into date folders, remove photo location", &[
+        "photo", "photos", "picture", "pictures", "image", "images", "jpg", "jpeg", "png", "webp", "heic", "resize", "thumbnail",
+        "exif", "gps", "location", "camera", "album", "gallery",
+    ]),
     ("connections", "external tools from connected MCP servers", &["remember", "recall", "forget", "memory", "told you", "mcp", "tool"]),
 ];
 
@@ -67,6 +71,7 @@ pub fn group_of(tool: &str) -> &'static str {
         "extract_archive" | "create_archive" => "archive",
         "git_diff" | "git_status" | "git_log" | "git_commit" | "list_snapshots" | "restore_snapshot" => "git",
         "open_in_default_app" => "apps",
+        "image_info" | "resize_image" | "organize_photos" | "remove_photo_location" => "images",
         "system_info" | "list_processes" | "list_windows" | "close_app" | "clipboard_read" | "clipboard_write" | "take_screenshot" => "desktop",
         _ => "core",
     }
@@ -280,7 +285,7 @@ mod tests {
     #[test]
     fn backend_messages_dont_load_groups() {
         // the checklist / claim-check messages say "tool" and "file"; only the user's words count
-        let msgs = vec![user("Rename every .jpeg file in photos"), user(&crate::agent::checklist::plan_request())];
+        let msgs = vec![user("Rename every .txt file in notes"), user(&crate::agent::checklist::plan_request())];
         assert_eq!(active_groups(&all(), &msgs).into_iter().collect::<Vec<_>>(), vec!["core"]);
     }
 

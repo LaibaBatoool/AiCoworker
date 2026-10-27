@@ -258,6 +258,62 @@ pub fn all_tool_schemas() -> Vec<ToolSchema> {
             }),
         ),
         tool(
+            "image_info",
+            "Look at pictures: one image file, or every picture directly inside a folder. Returns format, file size, width x height, date taken, camera, and whether the photo contains GPS location data (where it was taken; the coordinates themselves are never shown). For a folder, call it ONCE with the folder path (it checks every picture inside), not once per file. Use it before resizing, organizing or sharing photos.",
+            "safe",
+            json!({
+                "type": "object",
+                "properties": {
+                    "relative_path": { "type": "string", "description": "An image file or a folder of images inside the workspace." }
+                },
+                "required": ["relative_path"]
+            }),
+        ),
+        tool(
+            "resize_image",
+            "Make resized and/or converted COPIES of a picture or of every picture in a folder (originals are never changed or overwritten). Give max_width/max_height (keeps the shape, never enlarges), or percent, and/or format (jpg, png, webp). Photos are turned the right way up. New copies carry no location or camera data.",
+            "mutating",
+            json!({
+                "type": "object",
+                "properties": {
+                    "relative_path": { "type": "string", "description": "An image file or a folder of images." },
+                    "max_width": { "type": "integer", "description": "Fit inside this width in pixels." },
+                    "max_height": { "type": "integer", "description": "Fit inside this height in pixels." },
+                    "percent": { "type": "integer", "description": "Scale to this percent of the original (1-200). Use instead of max_width/max_height." },
+                    "format": { "type": "string", "description": "Output format: jpg, png or webp. Default: same as the original (jpg stays jpg, others become png)." },
+                    "quality": { "type": "integer", "description": "JPEG quality 30-100 (default 85)." },
+                    "output_folder": { "type": "string", "description": "Folder for the copies (created if needed). Default: next to the originals." }
+                },
+                "required": ["relative_path"]
+            }),
+        ),
+        tool(
+            "organize_photos",
+            "Sort the pictures directly inside a folder into sub-folders by the date each photo was taken (from the photo itself, or the file date if it has none): by month = 2026/2026-10/, by year = 2026/, by day = 2026/2026-10/2026-10-25/. Moves files (Undo can put them back). Use dry_run=true first to show the user the plan.",
+            "mutating",
+            json!({
+                "type": "object",
+                "properties": {
+                    "relative_path": { "type": "string", "description": "The folder of photos." },
+                    "by": { "type": "string", "description": "year, month (default) or day." },
+                    "dry_run": { "type": "boolean", "description": "true = only report where each photo would go." }
+                },
+                "required": ["relative_path"]
+            }),
+        ),
+        tool(
+            "remove_photo_location",
+            "Remove hidden GPS location, camera details, date taken and comments from JPEG/PNG photos (one file or a whole folder) before they are shared. Edits the files in place WITHOUT re-compressing them (no quality loss) and keeps their rotation. Undo can restore the originals.",
+            "mutating",
+            json!({
+                "type": "object",
+                "properties": {
+                    "relative_path": { "type": "string", "description": "A JPEG/PNG file or a folder of pictures." }
+                },
+                "required": ["relative_path"]
+            }),
+        ),
+        tool(
             "merge_pdfs",
             "Merge two or more PDF files from the workspace into ONE new PDF, keeping the exact order given. The output file must not already exist. Encrypted PDFs are refused. Bookmarks and form fields are not carried over.",
             "mutating",

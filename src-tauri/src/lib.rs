@@ -31,6 +31,7 @@ use tools::move_rename::move_rename;
 use tools::office_docs::{create_docx, create_xlsx};
 use tools::open_file::{check_openable, open_in_default_app, OpenResult};
 use tools::desktop::{ClipboardContent, CloseResult, ScreenshotResult, WindowInfo};
+use tools::images::{CleanResult, ImageInfoResult, OrganizeResult, ResizeResult};
 use tools::pdf_pages::{extract_pdf_pages, merge_pdfs, PdfPagesResult};
 use tools::read_file::read_file;
 use tools::read_spreadsheet::{read_spreadsheet, SpreadsheetData};
@@ -440,6 +441,81 @@ fn take_screenshot_tool(workspace_root: String, delay_seconds: u32, confirmed: b
     };
     log_action(&ws, &PermissionTier::Privileged, "take_screenshot", result.is_ok(), &detail);
     result
+}
+
+// ---- Picture tools (tools/images.rs) ----
+
+#[tauri::command]
+fn image_info_tool(workspace_root: String, relative_path: String) -> Result<ImageInfoResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    tools::images::image_info(&ws, &relative_path)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn resize_image_tool(
+    workspace_root: String,
+    relative_path: String,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+    percent: Option<u32>,
+    format: Option<String>,
+    quality: Option<u32>,
+    output_folder: Option<String>,
+    confirmed: bool,
+) -> Result<ResizeResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("resize_image: {}", relative_path);
+    if let Err(e) = tools::images::check_resize_args(max_width, max_height, percent, format.as_deref()) {
+        log_action(&ws, &PermissionTier::Mutating, &action, false, &e);
+        return Err(e);
+    }
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+    let result = tools::images::resize_image(&ws, &relative_path, max_width, max_height, percent, format, quality, output_folder);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &match &result {
+        Ok(r) => r.note.clone(),
+        Err(e) => e.clone(),
+    });
+    result
+}
+
+#[tauri::command]
+fn organize_photos_tool(workspace_root: String, relative_path: String, by: String, dry_run: bool, confirmed: bool) -> Result<OrganizeResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("organize_photos: {} by {}{}", relative_path, by, if dry_run { " (dry run)" } else { "" });
+    if dry_run {
+        return tools::images::organize_photos(&ws, &relative_path, &by, true); // changes nothing
+    }
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+    let result = tools::images::organize_photos(&ws, &relative_path, &by, false);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &match &result {
+        Ok(r) => r.note.clone(),
+        Err(e) => e.clone(),
+    });
+    result
+}
+
+#[tauri::command]
+fn remove_photo_location_tool(workspace_root: String, relative_path: String, confirmed: bool) -> Result<CleanResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let action = format!("remove_photo_location: {}", relative_path);
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+    let result = tools::images::remove_photo_location(&ws, &relative_path);
+    log_action(&ws, &PermissionTier::Mutating, &action, result.is_ok(), &match &result {
+        Ok(r) => r.note.clone(),
+        Err(e) => e.clone(),
+    });
+    result
+}
+
+/// Live view only (not an agent tool): a small JPEG preview as a data: URL.
+#[tauri::command]
+fn image_thumbnail_tool(workspace_root: String, relative_path: String, size: u32) -> Result<String, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    tools::images::image_thumbnail(&ws, &relative_path, size)
 }
 
 /// Every MCP tool call goes through here: the USER's configured tier is
@@ -956,6 +1032,11 @@ pub fn run() {
             clipboard_read_tool,
             clipboard_write_tool,
             take_screenshot_tool,
+            image_info_tool,
+            resize_image_tool,
+            organize_photos_tool,
+            remove_photo_location_tool,
+            image_thumbnail_tool,
             git_commit_tool,
             get_audit_log_tool,
             list_snapshots_tool,
