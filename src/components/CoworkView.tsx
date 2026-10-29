@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import PermissionDialog from "./PermissionDialog";
 import StatusOrb, { type OrbState } from "./StatusOrb";
 import Markdown from "./Markdown";
+import HelloToggle from "./HelloToggle";
 
 interface ToolCallFunction {
   name: string;
@@ -194,6 +195,7 @@ export default function CoworkView({
               value={agentModel}
               onChange={(e) => setAgentModel(e.target.value)}
             />
+            <HelloToggle />
           </div>
         )}
       </div>

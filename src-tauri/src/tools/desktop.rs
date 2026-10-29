@@ -69,6 +69,11 @@ fn base64(data: &[u8]) -> String {
 
 /// Runs a fixed script; `env` carries every variable part. Returns stdout.
 fn run_ps(script: &str, env: &[(&str, String)]) -> Result<String, String> {
+    run_ps_for(script, env, PS_TIMEOUT_SECS)
+}
+
+/// Same, with a custom time limit (Windows Hello waits for a finger or a PIN).
+fn run_ps_for(script: &str, env: &[(&str, String)], timeout_secs: u64) -> Result<String, String> {
     if !cfg!(windows) {
         return Err("This desktop tool is only available on Windows.".into());
     }
@@ -93,11 +98,11 @@ fn run_ps(script: &str, env: &[(&str, String)]) -> Result<String, String> {
     std::thread::spawn(move || {
         let _ = tx.send(child.wait_with_output());
     });
-    let out = match rx.recv_timeout(Duration::from_secs(PS_TIMEOUT_SECS)) {
+    let out = match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
         Ok(r) => r.map_err(|e| format!("PowerShell failed: {}", e))?,
         Err(_) => {
             let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).output();
-            return Err(format!("The desktop tool timed out after {} s.", PS_TIMEOUT_SECS));
+            return Err(format!("The desktop tool timed out after {} s.", timeout_secs));
         }
     };
     if !out.status.success() {
@@ -134,6 +139,13 @@ fn clean_stderr(err: &str) -> String {
     };
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).take(3).collect();
     if lines.is_empty() { "unknown error".to_string() } else { lines.join(" ").chars().take(400).collect() }
+}
+
+/// For other modules (auth.rs): a fixed script, values in env vars, JSON back.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn run_ps_json_for(script: &str, env: &[(&str, String)], timeout_secs: u64) -> Result<Value, String> {
+    let out = run_ps_for(script, env, timeout_secs)?;
+    serde_json::from_str(&out).map_err(|e| format!("Could not read the result from Windows ({}): {}", e, out.chars().take(200).collect::<String>()))
 }
 
 fn run_ps_json(script: &str, env: &[(&str, String)]) -> Result<Value, String> {

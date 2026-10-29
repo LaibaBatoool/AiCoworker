@@ -1,4 +1,5 @@
 pub mod agent;
+mod auth;
 mod egress;
 mod permission;
 mod recordings;
@@ -516,6 +517,19 @@ fn remove_photo_location_tool(workspace_root: String, relative_path: String, con
 fn image_thumbnail_tool(workspace_root: String, relative_path: String, size: u32) -> Result<String, String> {
     let ws = Workspace::new(&workspace_root)?;
     tools::images::image_thumbnail(&ws, &relative_path, size)
+}
+
+// ---- Windows Hello step-up authentication (auth.rs) ----
+
+#[tauri::command]
+async fn hello_status_tool() -> Result<auth::HelloStatus, String> {
+    // async + spawn_blocking: the PowerShell check must not block the window
+    tauri::async_runtime::spawn_blocking(auth::status).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_hello_required_tool(required: bool) -> Result<auth::HelloStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || auth::set_required(required)).await.map_err(|e| e.to_string())?
 }
 
 /// Every MCP tool call goes through here: the USER's configured tier is
@@ -1037,6 +1051,8 @@ pub fn run() {
             organize_photos_tool,
             remove_photo_location_tool,
             image_thumbnail_tool,
+            hello_status_tool,
+            set_hello_required_tool,
             git_commit_tool,
             get_audit_log_tool,
             list_snapshots_tool,

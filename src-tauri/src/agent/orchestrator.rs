@@ -592,6 +592,18 @@ fn process_pending_tool_calls(
         let is_failure = tool_result_counts_as_failure(&result);
         messages.push(tool_result_message(call, &result));
 
+        
+        // Windows Hello was cancelled or failed after Approve (auth.rs): the user is
+        // not confirmed as the account owner, so stop the run like a Decline.
+        if let Err(e) = &result {
+            if e.starts_with("USER_VERIFICATION_FAILED") {
+                return Err(LoopOutcome::StoppedForSafety {
+                    messages,
+                    reason: format!("Stopped: {} ('{}' was not run).", e.trim_start_matches("USER_VERIFICATION_FAILED: ").split(". The action").next().unwrap_or(e), call.function.name),
+                });
+            }
+        }
+        
         let count = tool_failure_counts.entry(call.function.name.clone()).or_insert(0);
         if is_failure {
             *count += 1;

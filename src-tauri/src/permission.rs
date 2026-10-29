@@ -49,7 +49,9 @@ pub fn checkpoint(tier: &PermissionTier, action: &str, confirmed: bool) -> Resul
         PermissionTier::Safe | PermissionTier::Mutating => Ok(()),
         PermissionTier::Privileged => {
             if confirmed {
-                Ok(())
+                // Step-up authentication (auth.rs): when switched on, an approved
+                // privileged action must ALSO pass Windows Hello before it runs.
+                crate::auth::step_up(action)
             } else {
                 Err(format!(
                     "PRIVILEGED_CONFIRMATION_REQUIRED: '{}' is a privileged action and requires explicit user confirmation before it can run.",
