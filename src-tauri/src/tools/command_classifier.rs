@@ -46,6 +46,16 @@ const KILLERS_AS_COMMAND: &[&str] = &["kill", "spps", "killall", "pkill"];
 
 pub fn refused_reason(command: &str) -> Option<String> {
     let n = normalise(command);
+        // The app's internal folder (audit log + undo snapshots) is off limits
+    // to the shell too, not only to the file tools. `aicowo~` is the
+    // Windows 8.3 short name. Best-effort: wildcards like `.ai*` still
+    // fall through to the normal tiers (del/rd = privileged, needs approval).
+    if n.contains(".aicoworker") || n.contains("aicowo~") {
+        return Some(format!(
+            "Refused: commands may not touch the app's internal folder ({}), which holds the audit log and undo snapshots.",
+            crate::workspace::INTERNAL_DIR
+        ));
+    }
     let mut found: Option<String> = all_words(&n).iter().map(|w| program_name(w).to_string()).find(|p| KILLERS_ANYWHERE.contains(&p.as_str()));
     if found.is_none() {
         found = segments(&n)
@@ -548,6 +558,24 @@ mod refused_tests {
             assert!(refused_reason(c).map(|r| r.contains("close_app")).unwrap_or(false), "should refuse: {}", c);
         }
         for c in ["dir", "findstr kill notes.txt", "git log --grep kill", "echo skill > a.txt", "npm test"] {
+            assert!(refused_reason(c).is_none(), "should not refuse: {}", c);
+        }
+    }
+    
+    #[test]
+    fn internal_folder_is_off_limits_to_the_shell() {
+        for c in [
+            "del .aicoworker\\audit_log.jsonl",
+            "type nul > .AICOWORKER\\audit_log.jsonl",
+            "rd /s /q .aicoworker",
+            "cd .aicoworker && del *",
+            "powershell -c \"Remove-Item -Recurse .aicoworker\"",
+            "del AICOWO~1\\audit_log.jsonl",
+            "t^ype .ai^coworker\\audit_log.jsonl",
+        ] {
+            assert!(refused_reason(c).map(|r| r.contains("internal folder")).unwrap_or(false), "should refuse: {}", c);
+        }
+        for c in ["dir", "git status", "echo aicoworker rocks > a.txt"] {
             assert!(refused_reason(c).is_none(), "should not refuse: {}", c);
         }
     }

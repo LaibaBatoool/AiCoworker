@@ -13,6 +13,9 @@ pub fn move_rename(
 ) -> Result<(), String> {
     let from_path = workspace.resolve(from_relative_path)?;
     let to_path = workspace.resolve(to_relative_path)?;
+    if workspace.is_root(&from_path) || workspace.is_root(&to_path) {
+        return Err("Refused: the workspace folder itself cannot be moved or renamed, or used as a destination name. Move the files inside it instead.".to_string());
+    }
 
     if !from_path.exists() {
         return Err(format!("'{}' does not exist.", from_relative_path));

@@ -11,6 +11,12 @@ pub fn delete_file(
     recursive: bool,
 ) -> Result<(), String> {
     let resolved_path = workspace.resolve(relative_path)?; // boundary check first, always
+    if workspace.is_root(&resolved_path) {
+        return Err(format!(
+            "Refused: '{}' is the workspace folder itself. Deleting it would remove everything in the workspace plus its audit log and undo history. Delete the individual files or subfolders instead.",
+            relative_path
+        ));
+    }
 
     if !resolved_path.exists() {
         return Err(format!("'{}' does not exist — nothing to delete.", relative_path));

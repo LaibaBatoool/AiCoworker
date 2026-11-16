@@ -1,4 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+/// The app's own folder inside every workspace: audit log + undo snapshots.
+/// Agent tools must never read or change it (the agent could otherwise
+/// rewrite its own audit trail or wipe the undo history).
+pub const INTERNAL_DIR: &str = ".aicoworker";
 
 /// Represents the one folder the agent is allowed to operate inside.
 #[derive(Clone)]
@@ -25,6 +30,21 @@ impl Workspace {
     /// working directory to confine terminal command execution.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// True for the workspace root itself (deleting or moving it would also
+    /// remove the internal folder and everything the user has).
+    pub fn is_root(&self, resolved: &Path) -> bool {
+        resolved == self.root
+    }
+
+    /// True if a resolved path is the internal folder or inside it.
+    /// Case-insensitive because Windows paths are.
+    fn is_internal(&self, resolved: &Path) -> bool {
+        match resolved.strip_prefix(&self.root).ok().and_then(|r| r.components().next()) {
+            Some(Component::Normal(first)) => first.to_string_lossy().eq_ignore_ascii_case(INTERNAL_DIR),
+            _ => false,
+        }
     }
 
     /// The core safety check: does this path live inside the workspace?
@@ -61,6 +81,12 @@ impl Workspace {
         };
 
         if resolved.starts_with(&self.root) {
+            if self.is_internal(&resolved) {
+                return Err(format!(
+                    "Access denied: '{}' is inside the app's internal folder ({}), which holds the audit log and undo snapshots. Agent tools cannot read or change it.",
+                    relative_path, INTERNAL_DIR
+                ));
+            }
             Ok(resolved)
         } else {
             Err(format!(
@@ -195,6 +221,69 @@ mod tests {
 
         // remove the junction FIRST so cleanup can never recurse into `outside`
         let _ = fs::remove_dir(&link);
+        let _ = fs::remove_dir_all(ws_dir.parent().unwrap());
+    }
+
+    /// The agent must not reach the audit log or the undo snapshots
+    /// (found 16 Nov 2026: write_file could empty audit_log.jsonl).
+    #[test]
+    fn blocks_internal_folder() {
+        let (ws_dir, _outside) = make_dirs("internal");
+        fs::create_dir_all(ws_dir.join(".aicoworker/snapshots")).unwrap();
+        fs::create_dir_all(ws_dir.join("sub")).unwrap();
+        fs::write(ws_dir.join(".aicoworker/audit_log.jsonl"), "entry\n").unwrap();
+        let ws = Workspace::new(ws_dir.to_str().unwrap()).unwrap();
+        for p in [
+            ".aicoworker",
+            ".aicoworker/audit_log.jsonl",
+            ".aicoworker/new.txt",
+            ".aicoworker/snapshots",
+            "sub/../.aicoworker/audit_log.jsonl",
+            "./.aicoworker/audit_log.jsonl",
+            #[cfg(windows)]
+            ".aicoworker\\audit_log.jsonl",
+        ] {
+            let r = ws.resolve(p);
+            assert!(r.as_ref().err().map(|e| e.contains("internal folder")).unwrap_or(false), "should block: {} (got {:?})", p, r);
+        }
+        // the real tools, end to end
+        assert!(crate::tools::write_file::write_file(&ws, ".aicoworker/audit_log.jsonl", "").is_err());
+        assert!(crate::tools::delete_file::delete_file(&ws, ".aicoworker", true).is_err());
+        assert!(crate::tools::move_rename::move_rename(&ws, ".aicoworker", "moved").is_err());
+        assert_eq!(fs::read_to_string(ws_dir.join(".aicoworker/audit_log.jsonl")).unwrap(), "entry\n");
+        assert!(ws_dir.join(".aicoworker/snapshots").exists());
+        // look-alike names are ordinary files
+        assert!(ws.resolve(".aicoworker-notes.txt").is_ok());
+        assert!(ws.resolve("sub/.aicoworker").is_ok(), "only the top-level folder is internal");
+        let _ = fs::remove_dir_all(ws_dir.parent().unwrap());
+    }
+
+    /// Windows paths ignore case, so .AiCoworker is the same folder there.
+    #[cfg(windows)]
+    #[test]
+    fn blocks_internal_folder_any_case() {
+        let (ws_dir, _outside) = make_dirs("internal_case");
+        fs::create_dir_all(ws_dir.join(".aicoworker")).unwrap();
+        let ws = Workspace::new(ws_dir.to_str().unwrap()).unwrap();
+        assert!(ws.resolve(".AICOWORKER/audit_log.jsonl").is_err());
+        assert!(ws.resolve(".AiCoworker").is_err());
+        let _ = fs::remove_dir_all(ws_dir.parent().unwrap());
+    }
+
+    /// Deleting or moving "." would take the whole workspace (and the
+    /// internal folder) with it.
+    #[test]
+    fn root_cannot_be_deleted_or_moved() {
+        let (ws_dir, _outside) = make_dirs("root");
+        fs::write(ws_dir.join("keep.txt"), "x").unwrap();
+        let ws = Workspace::new(ws_dir.to_str().unwrap()).unwrap();
+        for p in [".", "", "./", "sub/.."] {
+            let r = crate::tools::delete_file::delete_file(&ws, p, true);
+            assert!(r.is_err(), "delete of root must fail: {:?}", p);
+        }
+        assert!(crate::tools::move_rename::move_rename(&ws, ".", "elsewhere").is_err());
+        assert!(ws_dir.join("keep.txt").exists());
+        assert!(ws.resolve(".").is_ok(), "listing the root is still fine");
         let _ = fs::remove_dir_all(ws_dir.parent().unwrap());
     }
 
