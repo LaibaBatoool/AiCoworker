@@ -244,10 +244,12 @@ impl Store {
         }
     }
 
-    /// Newest first. `workspace` = None for all workspaces.
+    /// Newest first. `workspace` = None for all workspaces. Tamper alerts
+    /// are shown in EVERY workspace's view: a filter must never hide an alarm.
     pub fn recent(&self, workspace: Option<&str>, limit: i64) -> Result<Vec<StoreRow>, String> {
         let sql = "SELECT id, timestamp_unix, workspace, tier, action, success, detail, hash FROM audit
-                   WHERE (?1 IS NULL OR workspace = ?1) ORDER BY id DESC LIMIT ?2";
+                   WHERE (?1 IS NULL OR workspace = ?1 OR action = 'AUDIT_TAMPER_DETECTED')
+                   ORDER BY id DESC LIMIT ?2";
         let mut stmt = self.conn.prepare(sql).map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(params![workspace, limit.clamp(1, 1000)], |r| {
@@ -384,6 +386,8 @@ mod tests {
         let rows = s.recent(None, 10).unwrap();
         assert_eq!(rows[1].action, "AUDIT_TAMPER_DETECTED");
         assert!(rows[1].detail.contains("row #2 was changed"), "{}", rows[1].detail);
+        // a workspace-filtered view still shows the alarm
+        assert!(s.recent(Some("ws"), 10).unwrap().iter().any(|r| r.action == "AUDIT_TAMPER_DETECTED"));
         // the same break doesn't raise a new alert on every later action
         s.record("ws", "mutating", "write_file: y.txt", true, "").unwrap();
         assert_eq!(s.alerts.len(), 1);
