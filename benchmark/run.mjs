@@ -138,6 +138,7 @@ function runAgent(t) {
       ...process.env,
       AICOWORKER_NO_LAUNCH: "1", // open_in_default_app validates but never launches
       AICOWORKER_HELLO: "off", // headless runs: no Windows Hello prompts (approvals are auto-allowed anyway)
+      AICOWORKER_DB: "off", // benchmark actions must not fill the user's audit database (store.rs)
       // MCP only for MCP tasks (keeps every other task's tool list + token cost identical);
       // a missing file means "no MCP servers" — so the user's own %APPDATA% config never leaks in
       AICOWORKER_MCP_CONFIG: mcpConfigFor(t),

@@ -7,6 +7,7 @@ import Sidebar from "./components/Sidebar";
 import CoworkView from "./components/CoworkView";
 import LiveRun from "./components/LiveRun";
 import McpPanel from "./components/McpPanel";
+import AuditStorePanel from "./components/AuditStorePanel";
 
 interface CommandOutput {
   risk_level: string;
@@ -841,6 +842,8 @@ function App() {
               <p style={{ marginTop: "0.5rem" }}>{commitStatus}</p>
 
               <hr style={{ margin: "1.5rem 0" }} />
+
+              <AuditStorePanel workspaceRoot={workspaceRoot} />
 
               <h3>Audit Log (backend-generated, read-only)</h3>
               <button onClick={handleGetAuditLog}>Refresh Audit Log</button>

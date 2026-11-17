@@ -5,6 +5,7 @@ mod permission;
 mod recordings;
 mod reports;
 mod running_commands;
+mod store;
 mod tools;
 mod workspace;
 
@@ -578,6 +579,23 @@ fn get_audit_log_tool(workspace_root: String) -> Result<Vec<AuditLogRecord>, Str
     read_audit_log(&ws)
 }
 
+/// UI-only (not an agent tool): health of the central audit database.
+#[tauri::command]
+fn audit_store_status_tool() -> store::StoreStatus {
+    store::status()
+}
+
+/// UI-only: newest audit rows from the database, for one workspace
+/// (or all workspaces when workspace_root is empty).
+#[tauri::command]
+fn audit_store_recent_tool(workspace_root: String, limit: i64) -> Result<Vec<store::StoreRow>, String> {
+    if workspace_root.trim().is_empty() {
+        return store::recent(None, limit);
+    }
+    let ws = Workspace::new(&workspace_root)?;
+    store::recent(Some(&ws.root().display().to_string()), limit)
+}
+
 #[tauri::command]
 fn list_snapshots_tool(workspace_root: String) -> Result<Vec<SnapshotRecord>, String> {
     let ws = Workspace::new(&workspace_root)?;
@@ -1055,6 +1073,8 @@ pub fn run() {
             set_hello_required_tool,
             git_commit_tool,
             get_audit_log_tool,
+            audit_store_status_tool,
+            audit_store_recent_tool,
             list_snapshots_tool,
             restore_snapshot_tool,
             list_tool_schemas_tool,

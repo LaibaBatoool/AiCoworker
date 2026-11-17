@@ -73,6 +73,9 @@ pub fn log_action(workspace: &Workspace, tier: &PermissionTier, action: &str, su
     if let Err(e) = try_log_action(workspace, tier, action, success, detail) {
         eprintln!("Warning: failed to write audit log entry: {}", e);
     }
+    // The record we trust: SQLite outside the workspace, hash-chained (store.rs).
+    // The JSONL above stays as a human-readable mirror.
+    crate::store::record(&workspace.root().display().to_string(), tier.as_str(), action, success, detail);
 }
 
 fn try_log_action(

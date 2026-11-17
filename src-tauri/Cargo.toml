@@ -36,7 +36,9 @@ dotenvy = "0.15"
 shared_child = "1"
 
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-
+# Central audit store (store.rs). "bundled" compiles SQLite itself: nothing to install on Windows.
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
 # Dev builds (npm run tauri dev): optimise only the pure-Rust picture libraries.
 # Decoding/resizing a 12 MP photo took ~20 s unoptimised. NOT "*": that also
 # rebuilds leptonica-sys/tesseract-sys, whose build scripts need the MSVC
