@@ -359,6 +359,9 @@ fn real_tier(workspace_root: &str, name: &str, args: &Value) -> String {
     if name.starts_with("mcp__") {
         return crate::agent::mcp::tier_of(workspace_root, name).to_string();
     }
+    if name == "describe_image" {
+        return crate::tools::vision::tier().to_string(); // safe only when the model is local
+    }
     all_tool_schemas()
         .into_iter()
         .find(|t| t.name == name)
@@ -655,7 +658,10 @@ fn is_external_source(tool: &str) -> bool {
     // page sets its own), what the user copied, what is on the screen.
     // read_image_text: text in a picture is written by whoever made the picture.
     tool.starts_with("mcp__")
-        || matches!(tool, "fetch_url" | "list_windows" | "list_processes" | "clipboard_read" | "take_screenshot" | "read_image_text")
+        || matches!(
+            tool,
+            "fetch_url" | "list_windows" | "list_processes" | "clipboard_read" | "take_screenshot" | "read_image_text" | "describe_image"
+        )
 }
 
 /// "Spotlighting": wraps external tool output in markers so the model can

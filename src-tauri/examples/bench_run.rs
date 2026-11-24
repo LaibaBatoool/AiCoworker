@@ -236,6 +236,7 @@ async fn main() {
                 return;
             }
         };
+        aicoworker_lib::agent::configure_vision(&model, Some(api_key.clone()));
         OpenAiCompatibleClient::groq(api_key, model.clone())
     };
 

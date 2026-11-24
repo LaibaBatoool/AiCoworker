@@ -23,3 +23,4 @@ pub mod pdf_pages;
 pub mod open_file;
 pub mod desktop;
 pub mod images;
+pub mod vision;

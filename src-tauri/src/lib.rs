@@ -467,6 +467,31 @@ fn read_image_text_tool(
     tools::images::read_image_text(&ws, &relative_path, languages.as_deref(), find.as_deref())
 }
 
+
+/// describe_image: what is in pictures, via a vision model (tools/vision.rs).
+/// Privileged with Groq (the pictures leave the PC), safe with a local Ollama model.
+#[tauri::command]
+fn describe_image_tool(
+    workspace_root: String,
+    relative_path: String,
+    question: Option<String>,
+    confirmed: bool,
+) -> Result<tools::vision::DescribeResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let tier = if tools::vision::tier() == "safe" { PermissionTier::Safe } else { PermissionTier::Privileged };
+    let action = format!("describe_image: {}", relative_path);
+    checkpoint(&tier, &action, confirmed)?;
+    let result = tools::vision::describe_image(&ws, &relative_path, question.as_deref());
+    if tier == PermissionTier::Privileged {
+        let detail = match &result {
+            Ok(r) => format!("{} picture(s) sent to {}", r.pictures.len(), r.model),
+            Err(e) => e.clone(),
+        };
+        log_action(&ws, &tier, &action, result.is_ok(), &detail);
+    }
+    result
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn resize_image_tool(
@@ -988,9 +1013,11 @@ async fn run_agent_tool(
     // "ollama:<model>" in the model box = a local model through Ollama on this PC:
     // no API key, no quota, and nothing the agent reads leaves the computer.
     let client = if let Some(local) = model.strip_prefix("ollama:") {
+        tools::vision::configure(&model, None);
         agent::model_client::OpenAiCompatibleClient::local_ollama(local.trim())
     } else {
         let api_key = pick_api_key(&api_key, std::env::var("GROQ_API_KEY").ok())?;
+        tools::vision::configure(&model, Some(api_key.clone()));
         // Main model + backups that have their own daily quota (Groq limits are per model).
         agent::model_client::OpenAiCompatibleClient::groq(api_key, model.clone())
             .with_fallbacks(backup_models(&model))
@@ -1080,6 +1107,7 @@ pub fn run() {
             take_screenshot_tool,
             image_info_tool,
             read_image_text_tool,
+            describe_image_tool,
             resize_image_tool,
             organize_photos_tool,
             remove_photo_location_tool,

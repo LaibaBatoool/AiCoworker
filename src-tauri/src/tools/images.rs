@@ -202,7 +202,7 @@ fn upright(img: image::DynamicImage, orient: u32) -> image::DynamicImage {
     }
 }
 
-fn base64(data: &[u8]) -> String {
+pub(crate) fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
     for c in data.chunks(3) {
@@ -660,6 +660,36 @@ pub fn remove_photo_location(ws: &Workspace, relative_path: &str) -> Result<Clea
         cleaned,
         skipped,
     })
+}
+
+// ---------------------------------------------------------------
+// helpers for describe_image (tools/vision.rs)
+// ---------------------------------------------------------------
+
+/// The pictures at a path (one file, or the pictures directly in a folder),
+/// with the same checks as the other picture tools.
+pub(crate) fn collect_pictures(ws: &Workspace, relative_path: &str) -> Result<(Vec<PathBuf>, bool), String> {
+    collect(ws, relative_path)
+}
+
+pub(crate) fn relative_name(ws: &Workspace, p: &Path) -> String {
+    rel_of(ws, p)
+}
+
+/// Upright, shrunk to `long_side`, re-encoded as a plain JPEG: only the
+/// pixels survive (no EXIF/GPS, no text chunks), for sending to a model.
+pub(crate) fn jpeg_for_sending(p: &Path, long_side: u32) -> Result<Vec<u8>, String> {
+    if !DECODABLE_EXTS.contains(&ext_of(p).as_str()) {
+        return Err("This picture format (HEIC/HEIF) can't be read; convert it to JPG first.".into());
+    }
+    let img = upright(decode(p)?, read_exif_file(p).as_ref().map(orientation).unwrap_or(1));
+    let (w, h) = (img.width(), img.height());
+    let img = if w.max(h) > long_side { img.resize(long_side, long_side, image::imageops::FilterType::Triangle) } else { img };
+    let mut buf = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 85)
+        .encode_image(&img.to_rgb8())
+        .map_err(|e| format!("Could not prepare the picture: {}", e))?;
+    Ok(buf)
 }
 
 // ---------------------------------------------------------------

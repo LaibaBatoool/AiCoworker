@@ -7,6 +7,9 @@ pub mod routing;
 pub mod claims;
 pub mod checklist; 
 
+/// For bench_run: pick the vision model (describe_image) for a run.
+pub use crate::tools::vision::configure as configure_vision;
+
 use serde::Serialize;
 use serde_json::Value;
 

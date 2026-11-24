@@ -16,12 +16,13 @@ export interface ImageCard {
   preview: string;
 }
 
-export const IMAGE_TOOLS = ["image_info", "read_image_text", "resize_image", "organize_photos", "remove_photo_location"];
+export const IMAGE_TOOLS = ["image_info", "read_image_text", "describe_image", "resize_image", "organize_photos", "remove_photo_location"];
 
 export function describeImage(name: string, a: any): string {
   const p = String(a?.relative_path ?? "pictures").replace(/\\/g, "/");
   switch (name) {
     case "image_info": return `Looking at ${p}`;
+    case "describe_image": return a?.question ? `Asking about ${p}: "${a.question}"` : `Looking at what is in ${p}`;
     case "read_image_text": return a?.find ? `Looking for "${a.find}" in the text of ${p}` : `Reading the text in ${p}`;
     case "resize_image": {
       const how = a?.percent ? `${a.percent}%` : a?.max_width || a?.max_height ? `max ${a?.max_width ?? "…"}×${a?.max_height ?? "…"}` : "";
@@ -34,7 +35,7 @@ export function describeImage(name: string, a: any): string {
 }
 
 export function imageIcon(name: string): string {
-  return ({ image_info: "🖼️", read_image_text: "🔎", resize_image: "📐", organize_photos: "🗂️", remove_photo_location: "📍" } as Record<string, string>)[name] ?? "🖼️";
+  return ({ image_info: "🖼️", read_image_text: "🔎", describe_image: "👁️", resize_image: "📐", organize_photos: "🗂️", remove_photo_location: "📍" } as Record<string, string>)[name] ?? "🖼️";
 }
 
 const thumbCache = new Map<string, string | null>();
@@ -211,10 +212,46 @@ function Ocr({ card, root }: { card: ImageCard; root: string }) {
   );
 }
 
+function Describe({ card, root }: { card: ImageCard; root: string }) {
+  const v = parse(card.preview);
+  const pics: any[] = v?.pictures ?? [];
+  const head = card.args?.question ? `👁️ "${card.args.question}"` : "👁️ What is in the pictures";
+  if (card.status === "waiting") {
+    return (
+      <div className="im-panel">
+        <div className="im-head">{head}</div>
+        <div className="im-banner im-wait">⏸ Waiting for your approval: the pictures will be sent to the online vision model (location and camera data removed first).</div>
+      </div>
+    );
+  }
+  if (card.status !== "ok") return <div className="im-panel"><div className="im-head">{head}</div><Banner card={card} what="looking at the pictures" /></div>;
+  return (
+    <div className="im-panel">
+      <div className="im-head">
+        <span>{head}</span>
+        <span className="im-meta">{v?.model ?? ""}{v ? (v.local ? " · on this PC" : " · online") : ""}</span>
+      </div>
+      <div className="im-ocr-list">
+        {pics.slice(0, 12).map((d, n) => (
+          <div className="im-ocr-row im-in" key={d.path} style={{ animationDelay: `${n * 60}ms` }}>
+            <div className="im-ocr-pic">
+              <Thumb root={root} path={d.path} />
+              <div className="im-name">{name(d.path)}</div>
+            </div>
+            {d.error ? <div className="im-banner im-error">{d.error}</div> : <div className="im-desc">{d.description}</div>}
+          </div>
+        ))}
+      </div>
+      {pics.length > 0 && <div className="im-banner">Descriptions come from an AI model and can be wrong.</div>}
+    </div>
+  );
+}
+
 export default function ImageStage({ card, workspaceRoot }: { card: ImageCard; workspaceRoot: string }) {
   switch (card.name) {
     case "image_info": return <Info card={card} root={workspaceRoot} />;
     case "read_image_text": return <Ocr card={card} root={workspaceRoot} />;
+    case "describe_image": return <Describe card={card} root={workspaceRoot} />;
     case "resize_image": return <Resize card={card} root={workspaceRoot} />;
     case "organize_photos": return <Organize card={card} root={workspaceRoot} />;
     case "remove_photo_location": return <Clean card={card} root={workspaceRoot} />;
