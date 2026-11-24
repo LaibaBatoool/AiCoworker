@@ -125,6 +125,13 @@ pub fn dispatch_tool_call(
         "clipboard_write" => crate::clipboard_write_tool(ws, get_str(args, "text")?, confirmed).and_then(to_value),
         "take_screenshot" => crate::take_screenshot_tool(ws, get_u32(args, "delay_seconds", 3), confirmed).and_then(to_value),
         "image_info" => crate::image_info_tool(ws, get_str(args, "relative_path")?).and_then(to_value),
+                "read_image_text" => crate::read_image_text_tool(
+            ws,
+            get_str(args, "relative_path")?,
+            get_opt_str(args, "languages"),
+            get_opt_str(args, "find"),
+        )
+        .and_then(to_value),
         "resize_image" => crate::resize_image_tool(
             ws,
             get_str(args, "relative_path")?,

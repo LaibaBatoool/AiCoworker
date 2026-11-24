@@ -653,7 +653,9 @@ fn tool_result_message(call: &ToolCallRequest, result: &Result<Value, String>) -
 fn is_external_source(tool: &str) -> bool {
     // Desktop tools return text anyone can control: window titles (a web
     // page sets its own), what the user copied, what is on the screen.
-    tool.starts_with("mcp__") || matches!(tool, "fetch_url" | "list_windows" | "list_processes" | "clipboard_read" | "take_screenshot")
+    // read_image_text: text in a picture is written by whoever made the picture.
+    tool.starts_with("mcp__")
+        || matches!(tool, "fetch_url" | "list_windows" | "list_processes" | "clipboard_read" | "take_screenshot" | "read_image_text")
 }
 
 /// "Spotlighting": wraps external tool output in markers so the model can

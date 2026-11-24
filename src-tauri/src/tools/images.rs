@@ -663,6 +663,213 @@ pub fn remove_photo_location(ws: &Workspace, relative_path: &str) -> Result<Clea
 }
 
 // ---------------------------------------------------------------
+// read_image_text (OCR) — safe. Text in a picture is written by
+// whoever made the picture, so the orchestrator spotlights the result.
+// ---------------------------------------------------------------
+
+/// OCR is slow (~1-3 s per picture), so a smaller cap than other tools.
+pub const OCR_MAX_FILES: usize = 30;
+const OCR_TEXT_CAP: usize = 6_000; // per picture
+const OCR_TOTAL_CAP: usize = 30_000; // whole answer
+/// Long side of the picture handed to Tesseract. Phone screenshots and
+/// small scans read much better when enlarged to roughly 300 dpi size.
+const OCR_TARGET_LONG_SIDE: u32 = 2000;
+
+#[derive(Serialize, Debug)]
+pub struct OcrFile {
+    pub path: String,
+    /// "text" | "low_confidence" | "no_text" | "error"
+    pub status: String,
+    /// Tesseract's mean confidence, 0-100.
+    pub confidence: i32,
+    pub words: usize,
+    pub text: String,
+    pub truncated: bool,
+}
+
+#[derive(Serialize, Debug)]
+pub struct OcrResult {
+    pub languages: String,
+    pub files: Vec<OcrFile>,
+    /// With `find`: how many pictures contain the text (only those are listed).
+    pub matched: Option<usize>,
+    pub checked: usize,
+    pub note: Option<String>,
+}
+
+/// "eng", "eng+urd" ... Tesseract language codes only: letters, '_' and '+'.
+pub fn check_languages(languages: Option<&str>) -> Result<String, String> {
+    let l = languages.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).unwrap_or_else(|| "eng".into());
+    // max 4 languages: each extra one makes OCR slower and less accurate
+    let ok = l.len() <= 40
+        && l.split('+').count() <= 4
+        && l.split('+').all(|p| !p.is_empty() && p.len() <= 12 && p.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+    if ok {
+        Ok(l)
+    } else {
+        Err(format!("'{}' is not a valid OCR language list. Use up to 4 Tesseract codes like eng, urd, ara, or eng+urd.", l))
+    }
+}
+
+/// Makes a picture easier to read: upright (EXIF), greyscale, enlarged when
+/// small, contrast stretched (faded receipts, dim phone photos). PNG bytes.
+fn prepare_for_ocr(p: &Path) -> Result<Vec<u8>, String> {
+    let img = upright(decode(p)?, read_exif_file(p).as_ref().map(orientation).unwrap_or(1));
+    let mut gray = img.to_luma8();
+    let (w, h) = gray.dimensions();
+    let long = w.max(h).max(1);
+    if long < OCR_TARGET_LONG_SIDE {
+        let scale = (OCR_TARGET_LONG_SIDE as f32 / long as f32).min(4.0);
+        let (nw, nh) = (((w as f32) * scale) as u32, ((h as f32) * scale) as u32);
+        if nw > 0 && nh > 0 {
+            gray = image::imageops::resize(&gray, nw, nh, image::imageops::FilterType::CatmullRom);
+        }
+    }
+    // contrast stretch between the 1st and 99th percentile of brightness
+    let mut hist = [0u64; 256];
+    for px in gray.pixels() {
+        hist[px.0[0] as usize] += 1;
+    }
+    let total: u64 = hist.iter().sum();
+    let (mut lo, mut hi, mut acc) = (0usize, 255usize, 0u64);
+    for (v, n) in hist.iter().enumerate() {
+        acc += n;
+        if acc * 100 >= total {
+            lo = v;
+            break;
+        }
+    }
+    acc = 0;
+    for v in (0..256).rev() {
+        acc += hist[v];
+        if acc * 100 >= total {
+            hi = v;
+            break;
+        }
+    }
+    if hi > lo + 10 {
+        let range = (hi - lo) as f32;
+        for px in gray.pixels_mut() {
+            let v = ((px.0[0] as f32 - lo as f32) * 255.0 / range).clamp(0.0, 255.0);
+            px.0[0] = v as u8;
+        }
+    }
+    let mut buf = Vec::new();
+    image::DynamicImage::ImageLuma8(gray)
+        .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
+/// OCR one picture file (already resolved inside the workspace).
+/// Returns (text, mean confidence). Also used by read_file for images.
+pub fn ocr_file(p: &Path, languages: &str) -> Result<(String, i32), String> {
+    let png = prepare_for_ocr(p)?;
+    let t = tesseract::Tesseract::new(None, Some(languages)).map_err(|_| {
+        format!(
+            "OCR language '{}' is not installed. Install its .traineddata file (e.g. urd.traineddata) into Tesseract's tessdata folder, or use 'eng'.",
+            languages
+        )
+    })?;
+    let mut t = t.set_image_from_mem(&png).map_err(|e| format!("OCR could not load the picture: {}", e))?;
+    let text = t.get_text().map_err(|e| format!("OCR failed: {}", e))?;
+    let conf = t.mean_text_conf();
+    // tidy: trailing spaces, runs of blank lines
+    let mut out = String::new();
+    let mut blank = 0;
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.trim().is_empty() {
+            blank += 1;
+            if blank > 1 {
+                continue;
+            }
+        } else {
+            blank = 0;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    Ok((out.trim().to_string(), conf))
+}
+
+fn normalise_for_find(s: &str) -> String {
+    s.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn read_image_text(ws: &Workspace, relative_path: &str, languages: Option<&str>, find: Option<&str>) -> Result<OcrResult, String> {
+    let langs = check_languages(languages)?;
+    let (files, is_folder) = collect(ws, relative_path)?;
+    if files.len() > OCR_MAX_FILES {
+        return Err(format!(
+            "'{}' has {} pictures; reading text is slow, so the limit is {} per call. Use a smaller folder or one file at a time.",
+            relative_path, files.len(), OCR_MAX_FILES
+        ));
+    }
+    let needle = find.map(normalise_for_find).filter(|s| !s.is_empty());
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    let mut capped = false;
+    for p in &files {
+        let rel = rel_of(ws, p);
+        if !DECODABLE_EXTS.contains(&ext_of(p).as_str()) {
+            out.push(OcrFile { path: rel, status: "error".into(), confidence: 0, words: 0, text: "This picture format (HEIC/HEIF) can't be read; convert it to JPG first.".into(), truncated: false });
+            continue;
+        }
+        let (text, conf) = match ocr_file(p, &langs) {
+            Ok(v) => v,
+            // a missing language fails every file the same way: stop at once
+            Err(e) if e.contains("not installed") => return Err(e),
+            Err(e) => {
+                out.push(OcrFile { path: rel, status: "error".into(), confidence: 0, words: 0, text: e, truncated: false });
+                continue;
+            }
+        };
+        let words = text.split_whitespace().count();
+        let status = if words == 0 || conf < 30 {
+            "no_text"
+        } else if conf < 60 {
+            "low_confidence"
+        } else {
+            "text"
+        };
+        if let Some(n) = &needle {
+            if status == "no_text" || !normalise_for_find(&text).contains(n.as_str()) {
+                continue;
+            }
+        }
+        let mut text = if status == "no_text" { String::new() } else { text };
+        let mut truncated = false;
+        let room = OCR_TEXT_CAP.min(OCR_TOTAL_CAP.saturating_sub(total));
+        if text.chars().count() > room {
+            text = text.chars().take(room).collect();
+            truncated = true;
+            capped |= room < OCR_TEXT_CAP;
+        }
+        total += text.chars().count();
+        out.push(OcrFile { path: rel, status: status.into(), confidence: conf, words, text, truncated });
+    }
+    let matched = needle.as_ref().map(|_| out.iter().filter(|f| f.status != "error").count());
+    let mut notes = Vec::new();
+    if capped {
+        notes.push("Output limit reached: later text is cut. Read fewer pictures per call.".to_string());
+    }
+    if out.iter().any(|f| f.status == "low_confidence") {
+        notes.push("low_confidence = the text may contain mistakes (blurry, tilted or handwritten). Say so to the user.".into());
+    }
+    if is_folder && needle.is_some() && matched == Some(0) {
+        notes.push(format!("None of the {} pictures contain that text.", files.len()));
+    }
+    Ok(OcrResult {
+        languages: langs,
+        files: out,
+        matched,
+        checked: files.len(),
+        note: if notes.is_empty() { None } else { Some(notes.join(" ")) },
+    })
+}
+
+// ---------------------------------------------------------------
 // image_thumbnail (Live view only, not an agent tool)
 // ---------------------------------------------------------------
 
@@ -866,5 +1073,70 @@ mod tests {
         assert!(remove_photo_location(&w, "p.jpg").unwrap().cleaned[0].had_location);
         assert!(!image_info(&w, "p.jpg").unwrap().images[0].has_location);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    
+    // ---------- read_image_text (OCR) ----------
+
+    fn receipt_ws(tag: &str) -> (PathBuf, Workspace) {
+        let (dir, w) = ws(tag);
+        fs::create_dir_all(dir.join("receipts")).unwrap();
+        fs::write(dir.join("receipts/cafe.png"), include_bytes!("testdata/ocr-receipt.png")).unwrap();
+        // a blank picture: nothing to read
+        let blank = image::RgbImage::from_pixel(400, 300, image::Rgb([240, 240, 240]));
+        blank.save(dir.join("receipts/blank.png")).unwrap();
+        (dir, w)
+    }
+
+    #[test]
+    fn ocr_reads_text_from_a_small_receipt() {
+        let (dir, w) = receipt_ws("ocr_one");
+        let r = read_image_text(&w, "receipts/cafe.png", None, None).unwrap();
+        assert_eq!(r.languages, "eng");
+        let f = &r.files[0];
+        assert_eq!(f.status, "text", "{:?}", f);
+        assert!(f.text.contains("TOTAL 4500"), "{}", f.text);
+        assert!(f.text.contains("PIEAS CAFE"), "{}", f.text);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ocr_folder_and_find() {
+        let (dir, w) = receipt_ws("ocr_find");
+        let all = read_image_text(&w, "receipts", None, None).unwrap();
+        assert_eq!(all.checked, 2);
+        let blank = all.files.iter().find(|f| f.path.ends_with("blank.png")).unwrap();
+        assert_eq!(blank.status, "no_text");
+        assert!(blank.text.is_empty());
+        // find is case- and spacing-insensitive, and lists only matches
+        let hit = read_image_text(&w, "receipts", None, Some("total   4500")).unwrap();
+        assert_eq!(hit.matched, Some(1));
+        assert_eq!(hit.files.len(), 1);
+        assert!(hit.files[0].path.ends_with("cafe.png"));
+        let miss = read_image_text(&w, "receipts", None, Some("biryani")).unwrap();
+        assert_eq!(miss.matched, Some(0));
+        assert!(miss.note.unwrap().contains("None of the 2 pictures"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ocr_languages_are_checked() {
+        assert_eq!(check_languages(Some("ENG+urd")).unwrap(), "eng+urd");
+        assert_eq!(check_languages(None).unwrap(), "eng");
+        for bad in ["eng;rm", "../x", "eng+", "e n g", "eng+urd+ara+fra+deu+spa+ita+hin+ben"] {
+            assert!(check_languages(Some(bad)).is_err(), "{}", bad);
+        }
+        // a language that isn't installed fails once, clearly, not per file
+        let (dir, w) = receipt_ws("ocr_lang");
+        let e = read_image_text(&w, "receipts", Some("zzz"), None).unwrap_err();
+        assert!(e.contains("not installed"), "{}", e);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ocr_outside_workspace_is_refused() {
+        let (dir, w) = receipt_ws("ocr_out");
+        assert!(read_image_text(&w, "../x.png", None, None).is_err());
+        let _ = fs::remove_dir_all(dir);
     }
 }

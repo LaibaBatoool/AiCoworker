@@ -48,14 +48,17 @@ const GROUPS: &[(&str, &str, &[&str])] = &[
     ("web", "fetch public web pages", &["http", "www", "url", "website", "web", "webpage", "link", "online", "internet", "fetch", "download", ".com", ".org"]),
     ("archive", "zip archives", &["zip", "archive", "compress", "unzip", "extract", "tar", "7z"]),
     ("git", "git history, commits, snapshots and undo", &["git", "commit", "diff", "repo", "repository", "snapshot", "snapshots", "undo", "restore", "revert"]),
-    ("apps", "open a file in its default app", &["open it", "open the", "open in", "launch", "show me", "preview"]),
+    ("apps", "open a file in its default app", &[
+        "open it", "open the", "open in", "open my", "open this", "open file", "default app", "launch", "show me", "preview",
+        "in word", "in excel", "in powerpoint", "in notepad",
+    ]),
         ("desktop", "this computer: system status (RAM, disk, battery), running apps and windows, close an app, clipboard, screenshot", &[
         "screen", "screenshot", "clipboard", "copied", "paste", "window", "windows", "running", "process", "processes",
         "close", "quit", "ram", "cpu", "disk space", "storage", "battery", "slow", "laptop", "computer", "my pc", "system info",
     ]),
-    ("images", "pictures: image info (size, date taken, GPS location), resize/convert copies, sort photos into date folders, remove photo location", &[
+    ("images", "pictures: image info (size, date taken, GPS location), read text in pictures (OCR), resize/convert copies, sort photos into date folders, remove photo location", &[
         "photo", "photos", "picture", "pictures", "image", "images", "jpg", "jpeg", "png", "webp", "heic", "resize", "thumbnail",
-        "exif", "gps", "location", "camera", "album", "gallery",
+        "exif", "gps", "location", "camera", "album", "gallery", "ocr", "scan", "scanned", "receipt", "receipts", "handwritten",
     ]),
     ("connections", "external tools from connected MCP servers", &["remember", "recall", "forget", "memory", "told you", "mcp", "tool"]),
 ];
@@ -71,7 +74,7 @@ pub fn group_of(tool: &str) -> &'static str {
         "extract_archive" | "create_archive" => "archive",
         "git_diff" | "git_status" | "git_log" | "git_commit" | "list_snapshots" | "restore_snapshot" => "git",
         "open_in_default_app" => "apps",
-        "image_info" | "resize_image" | "organize_photos" | "remove_photo_location" => "images",
+        "image_info" | "read_image_text" | "resize_image" | "organize_photos" | "remove_photo_location" => "images",
         "system_info" | "list_processes" | "list_windows" | "close_app" | "clipboard_read" | "clipboard_write" | "take_screenshot" => "desktop",
         _ => "core",
     }
@@ -280,6 +283,15 @@ mod tests {
         assert_eq!(on.into_iter().collect::<Vec<_>>(), vec!["core"]);
         assert!(active_groups(&all(), &[user("Write a Word document about rain")]).contains("office"));
         assert!(active_groups(&all(), &[user("merge a.pdf and b.pdf")]).contains("office"));
+    }
+
+        #[test]
+    fn opening_and_ocr_words_load_their_groups() {
+        // benchmark S12's wording ("Open report.pdf in its default app") matched no apps word before
+        assert!(active_groups(&all(), &[user("Open report.pdf in its default app so I can read it")]).contains("apps"));
+        assert!(active_groups(&all(), &[user("open my cv in word")]).contains("apps"));
+        assert!(active_groups(&all(), &[user("What is the total on the receipt in scans/?")]).contains("images"));
+        assert!(active_groups(&all(), &[user("OCR the pictures in scans")]).contains("images"));
     }
 
     #[test]

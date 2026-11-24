@@ -16,12 +16,13 @@ export interface ImageCard {
   preview: string;
 }
 
-export const IMAGE_TOOLS = ["image_info", "resize_image", "organize_photos", "remove_photo_location"];
+export const IMAGE_TOOLS = ["image_info", "read_image_text", "resize_image", "organize_photos", "remove_photo_location"];
 
 export function describeImage(name: string, a: any): string {
   const p = String(a?.relative_path ?? "pictures").replace(/\\/g, "/");
   switch (name) {
     case "image_info": return `Looking at ${p}`;
+    case "read_image_text": return a?.find ? `Looking for "${a.find}" in the text of ${p}` : `Reading the text in ${p}`;
     case "resize_image": {
       const how = a?.percent ? `${a.percent}%` : a?.max_width || a?.max_height ? `max ${a?.max_width ?? "…"}×${a?.max_height ?? "…"}` : "";
       return `${how ? "Resizing" : "Converting"} ${p}${how ? ` (${how})` : ""}${a?.format ? ` → ${String(a.format).toUpperCase()}` : ""}`;
@@ -33,7 +34,7 @@ export function describeImage(name: string, a: any): string {
 }
 
 export function imageIcon(name: string): string {
-  return ({ image_info: "🖼️", resize_image: "📐", organize_photos: "🗂️", remove_photo_location: "📍" } as Record<string, string>)[name] ?? "🖼️";
+  return ({ image_info: "🖼️", read_image_text: "🔎", resize_image: "📐", organize_photos: "🗂️", remove_photo_location: "📍" } as Record<string, string>)[name] ?? "🖼️";
 }
 
 const thumbCache = new Map<string, string | null>();
@@ -172,9 +173,48 @@ function Clean({ card, root }: { card: ImageCard; root: string }) {
   );
 }
 
+function Ocr({ card, root }: { card: ImageCard; root: string }) {
+  const v = parse(card.preview);
+  // the preview may be cut at 4,000 chars: fall back to whatever paths/statuses are visible
+  const files: any[] = v?.files ?? [...card.preview.matchAll(/"path":"([^"]+)","status":"(\w+)","confidence":(-?\d+)/g)]
+    .map((m) => ({ path: m[1], status: m[2], confidence: Number(m[3]), text: "" }));
+  const head = card.args?.find ? `🔎 Looking for "${card.args.find}"` : "🔎 Text in pictures";
+  if (card.status !== "ok") return <div className="im-panel"><div className="im-head">{head}</div><Banner card={card} what="reading the text" /></div>;
+  const label: Record<string, string> = { text: "read", low_confidence: "may have mistakes", no_text: "no text found", error: "could not read" };
+  return (
+    <div className="im-panel">
+      <div className="im-head">
+        <span>{head}</span>
+        <span className="im-meta">
+          {v?.matched != null ? `${v.matched} of ${v.checked} picture${v.checked === 1 ? "" : "s"} match` : `${files.length} picture${files.length === 1 ? "" : "s"}`}
+          {v?.languages ? ` · ${v.languages}` : ""}
+        </span>
+      </div>
+      {files.length === 0 && <div className="im-banner">{v?.checked ? `None of the ${v.checked} pictures contain that text.` : "No pictures matched."}</div>}
+      <div className="im-ocr-list">
+        {files.slice(0, 12).map((f, n) => (
+          <div className="im-ocr-row im-in" key={f.path} style={{ animationDelay: `${n * 60}ms` }}>
+            <div className="im-ocr-pic">
+              <Thumb root={root} path={f.path} />
+              <div className="im-name">{name(f.path)}</div>
+              <div className={`im-ocr-badge im-ocr-s-${f.status}`}>{label[f.status] ?? f.status}{f.status !== "error" && f.status !== "no_text" ? ` · ${f.confidence}%` : ""}</div>
+            </div>
+            <pre className="im-ocr-text">{f.text ? f.text : f.status === "no_text" ? "—" : "…"}{f.truncated ? "\n…" : ""}</pre>
+          </div>
+        ))}
+      </div>
+      {files.some((f) => f.status === "low_confidence") && (
+        <div className="im-banner">Some text may contain mistakes (blurry, tilted or handwritten pictures).</div>
+      )}
+      {files.some((f) => f.truncated) && <div className="im-banner">Long text was cut; the agent read fewer pictures per call.</div>}
+    </div>
+  );
+}
+
 export default function ImageStage({ card, workspaceRoot }: { card: ImageCard; workspaceRoot: string }) {
   switch (card.name) {
     case "image_info": return <Info card={card} root={workspaceRoot} />;
+    case "read_image_text": return <Ocr card={card} root={workspaceRoot} />;
     case "resize_image": return <Resize card={card} root={workspaceRoot} />;
     case "organize_photos": return <Organize card={card} root={workspaceRoot} />;
     case "remove_photo_location": return <Clean card={card} root={workspaceRoot} />;

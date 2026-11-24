@@ -40,3 +40,18 @@
 .im-error { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.45); color: #fca5a5; white-space: pre-wrap; }
 
 @keyframes im-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+
+/* read_image_text (OCR): picture on the left, the text read from it on the right */
+.im-ocr-list { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+.im-ocr-row { display: grid; grid-template-columns: 150px 1fr; gap: 14px; align-items: start; }
+.im-ocr-pic { min-width: 0; }
+.im-ocr-badge { display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid rgba(255, 255, 255, 0.2); color: #cfcfcf; }
+.im-ocr-s-text { color: #86efac; border-color: rgba(34, 197, 94, 0.4); }
+.im-ocr-s-low_confidence { color: #fcd34d; border-color: rgba(245, 158, 11, 0.45); }
+.im-ocr-s-no_text { color: #9a9a9a; }
+.im-ocr-s-error { color: #fca5a5; border-color: rgba(239, 68, 68, 0.5); }
+.im-ocr-text { margin: 0; padding: 10px 12px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px; line-height: 1.45; color: #e5e5e5;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; }
+.im-ocr-pic .im-thumb img { object-fit: contain; background: rgba(255, 255, 255, 0.06); }

@@ -81,16 +81,11 @@ pub fn read_file(workspace: &Workspace, relative_path: &str) -> Result<String, S
 
             Ok(text)
         }
-        "png" | "jpg" | "jpeg" | "bmp" | "tiff" => {
-            let mut ocr = Tesseract::new(None, Some("eng"))
-                .map_err(|e| format!("Failed to init OCR engine: {}", e))?
-                .set_image(resolved_path.to_str().ok_or("Invalid path encoding")?)
-                .map_err(|e| format!("Failed to load image: {}", e))?;
+        "png" | "jpg" | "jpeg" | "bmp" | "tiff" | "tif" | "webp" | "gif" => {
+            // same cleaned-up OCR as read_image_text (upright, greyscale, enlarged, contrast)
+            let (text, confidence) = crate::tools::images::ocr_file(&resolved_path, "eng")?;
 
-            let confidence = ocr.mean_text_conf();
-            let text = ocr.get_text().map_err(|e| format!("OCR failed: {}", e))?;
-
-            if confidence < 40 {
+            if confidence < 40 || text.trim().is_empty() {
                 Ok(String::from("[No readable text detected in this image]"))
             } else {
                 Ok(text)

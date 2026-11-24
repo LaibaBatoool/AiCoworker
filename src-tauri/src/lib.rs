@@ -33,7 +33,7 @@ use tools::move_rename::move_rename;
 use tools::office_docs::{create_docx, create_xlsx};
 use tools::open_file::{check_openable, open_in_default_app, OpenResult};
 use tools::desktop::{ClipboardContent, CloseResult, ScreenshotResult, WindowInfo};
-use tools::images::{CleanResult, ImageInfoResult, OrganizeResult, ResizeResult};
+use tools::images::{CleanResult, ImageInfoResult, OcrResult, OrganizeResult, ResizeResult};
 use tools::pdf_pages::{extract_pdf_pages, merge_pdfs, PdfPagesResult};
 use tools::read_file::read_file;
 use tools::read_spreadsheet::{read_spreadsheet, SpreadsheetData};
@@ -451,6 +451,20 @@ fn take_screenshot_tool(workspace_root: String, delay_seconds: u32, confirmed: b
 fn image_info_tool(workspace_root: String, relative_path: String) -> Result<ImageInfoResult, String> {
     let ws = Workspace::new(&workspace_root)?;
     tools::images::image_info(&ws, &relative_path)
+}
+
+
+/// Safe: reads text from pictures (OCR). The result is spotlighted by the
+/// orchestrator, because anyone can put text in a picture.
+#[tauri::command]
+fn read_image_text_tool(
+    workspace_root: String,
+    relative_path: String,
+    languages: Option<String>,
+    find: Option<String>,
+) -> Result<OcrResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    tools::images::read_image_text(&ws, &relative_path, languages.as_deref(), find.as_deref())
 }
 
 #[tauri::command]
@@ -1065,6 +1079,7 @@ pub fn run() {
             clipboard_write_tool,
             take_screenshot_tool,
             image_info_tool,
+            read_image_text_tool,
             resize_image_tool,
             organize_photos_tool,
             remove_photo_location_tool,
