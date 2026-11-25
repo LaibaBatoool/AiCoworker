@@ -823,6 +823,25 @@ pub fn ocr_file(p: &Path, languages: &str) -> Result<(String, i32), String> {
     Ok((out.trim().to_string(), conf))
 }
 
+/// OCR on decorations (bats, borders, logos) returns symbol soup like
+/// "N \/\ N e . - s P PR". Real text is mostly word-like tokens.
+/// Used by read_image_text, read_file (pictures and pictures inside PDFs).
+pub fn looks_like_text(text: &str) -> bool {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    if tokens.is_empty() {
+        return false;
+    }
+    let wordlike = |t: &&&str| {
+        let core: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
+        let n = core.chars().count();
+        // a "word": 2+ letters/digits making up most of the token ("4500," "Rs." "Aug")
+        n >= 2 && n * 3 >= t.chars().count() * 2
+    };
+    let good = tokens.iter().filter(wordlike).count();
+    let long = tokens.iter().filter(|t| t.chars().filter(|c| c.is_alphanumeric()).count() >= 3).count();
+    good * 2 >= tokens.len() && long >= 1
+}
+
 fn normalise_for_find(s: &str) -> String {
     s.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -856,7 +875,7 @@ pub fn read_image_text(ws: &Workspace, relative_path: &str, languages: Option<&s
             }
         };
         let words = text.split_whitespace().count();
-        let status = if words == 0 || conf < 30 {
+        let status = if words == 0 || conf < 30 || !looks_like_text(&text) {
             "no_text"
         } else if conf < 60 {
             "low_confidence"
@@ -1161,6 +1180,19 @@ mod tests {
         let e = read_image_text(&w, "receipts", Some("zzz"), None).unwrap_err();
         assert!(e.contains("not installed"), "{}", e);
         let _ = fs::remove_dir_all(dir);
+    }
+
+        #[test]
+    fn ocr_junk_is_not_text() {
+        // real output of OCR on a decorated Halloween PDF (bats, castle)
+        let junk = "N \\/\\ N e\n. - s P PR\nPRI L N\n57 - 'k IS >\nN R i .\nI s ..\n/// N ’ \\k s\nN ) .";
+        assert!(!looks_like_text(junk));
+        for j in ["+", "¥", ". , -", "|| // \\\\"] {
+            assert!(!looks_like_text(j), "{}", j);
+        }
+        for t in ["TOTAL 4500", "HALLOWEEN Party\nSaturday, 20th Aug. 7pm sharp", "Rs. 12,750", "Invoice No 2231"] {
+            assert!(looks_like_text(t), "{}", t);
+        }
     }
 
     #[test]

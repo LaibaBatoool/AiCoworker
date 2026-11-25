@@ -41,7 +41,10 @@ pub fn read_file(workspace: &Workspace, relative_path: &str) -> Result<String, S
                         let confidence = loaded.mean_text_conf();
                         if confidence >= 40 {
                             if let Ok(ocr_text) = loaded.get_text() {
-                                text.push_str(&format!("\n\n[PDF Image {} text]:\n{}", i + 1, ocr_text));
+                                // decorative pictures (bats, borders, logos) OCR into symbol soup: skip it
+                                if crate::tools::images::looks_like_text(&ocr_text) {
+                                    text.push_str(&format!("\n\n[PDF Image {} text]:\n{}", i + 1, ocr_text));
+                                }
                             }
                         }
                     }
@@ -71,7 +74,10 @@ pub fn read_file(workspace: &Workspace, relative_path: &str) -> Result<String, S
                         let confidence = loaded.mean_text_conf();
                         if confidence >= 40 {
                             if let Ok(ocr_text) = loaded.get_text() {
-                                text.push_str(&format!("\n\n[Image {} text]:\n{}", i + 1, ocr_text));
+                                // decorative pictures (bats, borders, logos) OCR into symbol soup: skip it
+                                if crate::tools::images::looks_like_text(&ocr_text) {
+                                    text.push_str(&format!("\n\n[Image {} text]:\n{}", i + 1, ocr_text));
+                                }
                             }
                         }
                     }
@@ -85,7 +91,7 @@ pub fn read_file(workspace: &Workspace, relative_path: &str) -> Result<String, S
             // same cleaned-up OCR as read_image_text (upright, greyscale, enlarged, contrast)
             let (text, confidence) = crate::tools::images::ocr_file(&resolved_path, "eng")?;
 
-            if confidence < 40 || text.trim().is_empty() {
+            if confidence < 40 || !crate::tools::images::looks_like_text(&text) {
                 Ok(String::from("[No readable text detected in this image]"))
             } else {
                 Ok(text)

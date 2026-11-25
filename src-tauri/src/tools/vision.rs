@@ -29,6 +29,16 @@ pub const MAX_PICTURES: usize = 12;
 const SEND_LONG_SIDE: u32 = 1280;
 const MAX_QUESTION_CHARS: usize = 500;
 
+/// Per-minute 429s: wait (Groq's retry-after, max 45 s) and try again, twice.
+const MAX_RATE_RETRIES: usize = 2;
+const MAX_WAIT_SECS: f64 = 45.0;
+
+/// Groq says which limit was hit: "tokens per day (TPD)", "requests per day (RPD)".
+fn is_daily_limit(body: &str) -> bool {
+    let b = body.to_lowercase();
+    b.contains("per day") || b.contains("(tpd)") || b.contains("(rpd)")
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct VisionConfig {
     pub base_url: String,
@@ -152,7 +162,7 @@ fn ask_model(cfg: &VisionConfig, body: &Value) -> Result<String, String> {
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
-    for attempt in 0..2 {
+    for attempt in 0..=MAX_RATE_RETRIES {
         let mut req = client.post(&url).json(body);
         if let Some(k) = &cfg.api_key {
             req = req.bearer_auth(k);
@@ -165,6 +175,11 @@ fn ask_model(cfg: &VisionConfig, body: &Value) -> Result<String, String> {
             }
         })?;
         let status = resp.status().as_u16();
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<f64>().ok());
         let text = resp.text().unwrap_or_default();
         match status {
             200 => {
@@ -176,12 +191,16 @@ fn ask_model(cfg: &VisionConfig, body: &Value) -> Result<String, String> {
                 }
                 return Ok(answer);
             }
-            429 if attempt == 0 => {
-                // per-minute limit: one short wait, then give up for this picture
-                std::thread::sleep(Duration::from_secs(if cfg!(test) { 0 } else { 8 }));
+            429 if is_daily_limit(&text) => {
+                return Err("Groq's DAILY limit for the vision model is used up; describing pictures works again tomorrow. read_image_text (OCR) still works.".into())
+            }
+            429 if attempt < MAX_RATE_RETRIES => {
+                // per-minute limit (each picture is ~2,000 tokens): wait as long as Groq says
+                let wait = retry_after.unwrap_or(10.0).clamp(1.0, MAX_WAIT_SECS);
+                std::thread::sleep(if cfg!(test) { Duration::ZERO } else { Duration::from_secs_f64(wait) });
                 continue;
             }
-            429 => return Err("Groq rate limit reached for the vision model; try again in a minute (daily limit: try tomorrow).".into()),
+            429 => return Err("Groq's per-minute limit for the vision model was still reached after waiting; try again in a minute.".into()),
             401 | 403 => return Err("The API key was refused by the vision model's provider.".into()),
             400 | 404 if text.contains("model") => {
                 return Err(format!(
@@ -233,7 +252,7 @@ fn describe_with(cfg: &VisionConfig, ws: &Workspace, relative_path: &str, questi
         let mut out = Vec::new();
         for (rel, jpeg) in prepared {
             let r = jpeg.and_then(|bytes| ask_model(&cfg, &request_body(&cfg.model, q.as_deref(), &bytes)));
-            let stop = matches!(&r, Err(e) if e.contains("not available") || e.contains("refused") || e.contains("Could not reach"));
+            let stop = matches!(&r, Err(e) if e.contains("not available") || e.contains("refused") || e.contains("Could not reach") || e.contains("DAILY"));
             out.push(match r {
                 Ok(d) => Described { path: rel, description: d, error: None },
                 Err(e) => Described { path: rel, description: String::new(), error: Some(e) },
@@ -315,7 +334,8 @@ mod tests {
                         }
                     }
                 }
-                let resp = format!("HTTP/1.1 {} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", status, body.len(), body);
+                let extra = if status == 429 { "retry-after: 0.5\r\n" } else { "" };
+                let resp = format!("HTTP/1.1 {} X\r\ncontent-type: application/json\r\n{}content-length: {}\r\nconnection: close\r\n\r\n{}", status, extra, body.len(), body);
                 let _ = s.write_all(resp.as_bytes());
             }
         });
@@ -405,11 +425,19 @@ mod tests {
         assert!(r.pictures[0].error.as_ref().unwrap().contains("not available"));
         assert!(r.note.unwrap().contains("Stopped after 1 of 2"));
         assert_eq!(seen.lock().unwrap().len(), 1);
-        // a per-minute 429 is retried once
-        let (url2, seen2) = fake_server(vec![(429, "{}".into()), (200, answer("Red."))]);
+        // per-minute 429s are waited out (retry-after) up to twice
+        let tpm = r#"{"error":{"message":"Rate limit reached on tokens per minute (TPM): Limit 8000"}}"#;
+        let (url2, seen2) = fake_server(vec![(429, tpm.into()), (429, tpm.into()), (200, answer("Red."))]);
         let r2 = describe_with(&cfg(&url2, true), &w, "photos/red.png", None).unwrap();
         assert_eq!(r2.pictures[0].description, "Red.");
-        assert_eq!(seen2.lock().unwrap().len(), 2);
+        assert_eq!(seen2.lock().unwrap().len(), 3);
+        // the daily limit is not waited out: clear message, stop at the first picture
+        let tpd = r#"{"error":{"message":"Rate limit reached on tokens per day (TPD): Limit 200000"}}"#;
+        let (url3, seen3) = fake_server(vec![(429, tpd.into())]);
+        let r3 = describe_with(&cfg(&url3, false), &w, "photos", None).unwrap();
+        assert_eq!(r3.pictures.len(), 1);
+        assert!(r3.pictures[0].error.as_ref().unwrap().contains("DAILY"));
+        assert_eq!(seen3.lock().unwrap().len(), 1);
         let _ = fs::remove_dir_all(dir);
     }
 
