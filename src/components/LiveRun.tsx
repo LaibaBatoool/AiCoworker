@@ -110,6 +110,11 @@ function describe(name: string, a: any): string {
     case "edit_file": return `Editing ${p}`;
     case "read_file": return `Reading ${p}`;
     case "create_docx": return `Building Word doc ${p}`;
+    case "read_docx": return `Reading Word doc ${p}`;
+    case "edit_docx": {
+      const n = Array.isArray(a?.operations) ? a.operations.length : 0;
+      return `Editing Word doc ${p} (${n} change${n === 1 ? "" : "s"})`;
+    }
     case "create_xlsx": return `Building spreadsheet ${p}`;
     case "read_spreadsheet": return `Reading spreadsheet ${p}`;
     case "list_directory": return `Looking inside ${p}`;
@@ -158,7 +163,7 @@ function icon(name: string): string {
        if (notesTool(name)) return notesIcon(notesTool(name)!);
        if (name.startsWith("mcp__")) return "🔌";
   const m: Record<string, string> = {
-    write_file: "✍️", edit_file: "🩹", read_file: "📖", create_docx: "📝", create_xlsx: "📊",
+    write_file: "✍️", edit_file: "🩹", read_file: "📖", create_docx: "📝", read_docx: "📘", edit_docx: "✏️", create_xlsx: "📊",
     read_spreadsheet: "📊", list_directory: "📂", search_files: "🔎", get_file_metadata: "ℹ️",
     create_directory: "📁", delete_file: "🗑️", move_rename: "↪️", execute_command: "⌨️",
     fetch_url: "🌐", request_tools: "🧰", claim_check: "🔍", update_checklist: "📋", checklist_check: "☑️", plan_check: "🗒️", convert_to_pdf: "📄", git_commit: "🌿", git_diff: "🌿", git_status: "🌿", git_log: "🌿",
@@ -267,30 +272,189 @@ function SheetStage({ args }: { args: any }) {
   );
 }
 
+// **bold**, *italic*, ~~strike~~ as the Word tools understand them
+function InlineMd({ text }: { text: string }) {
+  const parts = String(text ?? "").split(/(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|\*[^*\s][^*]*\*|~~[^~]+~~)/g);
+  return (
+    <>
+      {parts.map((t, i) => {
+        if (/^\*\*\*.+\*\*\*$/.test(t)) return <b key={i}><i>{t.slice(3, -3)}</i></b>;
+        if (/^\*\*.+\*\*$/.test(t)) return <b key={i}>{t.slice(2, -2)}</b>;
+        if (/^~~.+~~$/.test(t)) return <s key={i}>{t.slice(2, -2)}</s>;
+        if (/^\*.+\*$/.test(t)) return <i key={i}>{t.slice(1, -1)}</i>;
+        return <span key={i}>{t}</span>;
+      })}
+    </>
+  );
+}
+
+function runStyle(r: any): React.CSSProperties {
+  const c = typeof r?.color === "string" ? r.color : undefined;
+  return {
+    fontWeight: r?.bold ? 700 : undefined,
+    fontStyle: r?.italic ? "italic" : undefined,
+    textDecoration: [r?.underline ? "underline" : "", r?.strike ? "line-through" : ""].join(" ").trim() || undefined,
+    color: c ? (/^#?[0-9a-f]{6}$/i.test(c) ? (c.startsWith("#") ? c : `#${c}`) : c) : undefined,
+    fontSize: typeof r?.size === "number" ? `${Math.min(Math.max(r.size, 8), 28) * 1.2}px` : undefined,
+    fontFamily: typeof r?.font === "string" ? r.font : undefined,
+    textAlign: r?.align === "justify" ? "justify" : r?.align,
+  };
+}
+
+function itemText(x: any): [string, number] {
+  return x && typeof x === "object" ? [String(x.text ?? ""), Math.min(Number(x.level) || 0, 4)] : [String(x ?? ""), 0];
+}
+
+// the blocks of create_docx / edit_docx insert, drawn like a page
+function DocBlocks({ blocks, delayStep = 160 }: { blocks: any[]; delayStep?: number }) {
+  return (
+    <>
+      {blocks.slice(0, 80).map((b, i) => {
+        const style = { animationDelay: `${Math.min(i, 40) * delayStep}ms`, ...runStyle(b) };
+        const t = b?.type;
+        if (t === "title") return <div key={i} className="lr-block lr-title" style={style}><InlineMd text={b.text} /></div>;
+        if (t === "heading") {
+          const lvl = Math.min(Math.max(Number(b.level) || 1, 1), 3);
+          return <div key={i} className={`lr-block lr-h${lvl}`} style={style}><InlineMd text={b.text} /></div>;
+        }
+        if (t === "bullet_list" || t === "bullets" || t === "numbered_list") {
+          const items: any[] = Array.isArray(b.items) ? b.items.slice(0, 40) : [];
+          const Tag = t === "numbered_list" ? "ol" : "ul";
+          return (
+            <Tag key={i} className="lr-block lr-doc-list" style={style}>
+              {items.map((x, j) => { const [tx, lvl] = itemText(x); return <li key={j} style={{ marginLeft: lvl * 22 }}><InlineMd text={tx} /></li>; })}
+            </Tag>
+          );
+        }
+        if (t === "table") {
+          return (
+            <table key={i} className="lr-block lr-doc-table" style={{ animationDelay: style.animationDelay }}>
+              {Array.isArray(b.headers) && <thead><tr>{b.headers.map((h: any, j: number) => <th key={j}>{String(h)}</th>)}</tr></thead>}
+              <tbody>{(b.rows ?? []).slice(0, 30).map((r: any[], j: number) => (
+                <tr key={j}>{(r ?? []).map((c, k) => <td key={k}>{String(c)}</td>)}</tr>
+              ))}</tbody>
+            </table>
+          );
+        }
+        if (t === "image") {
+          return (
+            <div key={i} className="lr-block lr-doc-img" style={{ animationDelay: style.animationDelay }}>
+              <div className="lr-doc-img-box">🖼️ {shortName(String(b.path ?? "picture"))}</div>
+              {b.caption && <div className="lr-doc-caption">{String(b.caption)}</div>}
+            </div>
+          );
+        }
+        if (t === "page_break") return <div key={i} className="lr-block lr-doc-break" style={{ animationDelay: style.animationDelay }}>page break</div>;
+        if (Array.isArray(b?.runs)) {
+          return <p key={i} className="lr-block lr-p" style={style}>{b.runs.map((r: any, k: number) => <span key={k} style={runStyle(r)}>{String(r?.text ?? "")}</span>)}</p>;
+        }
+        return <p key={i} className="lr-block lr-p" style={style}><InlineMd text={b?.text} /></p>;
+      })}
+    </>
+  );
+}
+
+function footerText(a: any): string {
+  const pn = a?.page_numbers;
+  const pages = pn === true || pn === "page_of" ? "Page 1 of 1" : pn === "page" ? "Page 1" : pn === "number_only" ? "1" : "";
+  const f = String(a?.footer ?? a?.text ?? "").replace("{page}", "1").replace("{pages}", "1");
+  return [f, f.includes("1") && !pages ? "" : pages].filter(Boolean).join("    ");
+}
+
 function DocStage({ args }: { args: any }) {
-  const blocks: any[] = Array.isArray(args?.blocks) ? args.blocks.slice(0, 80) : [];
+  const blocks: any[] = Array.isArray(args?.blocks) ? args.blocks : [];
+  const foot = footerText(args);
   return (
     <div className="lr-page-wrap">
       <div className="lr-page">
-        {blocks.map((b, i) => {
-          const style = { animationDelay: `${Math.min(i, 40) * 160}ms` };
-          if (b?.type === "heading") {
-            const lvl = Math.min(Math.max(Number(b.level) || 1, 1), 3);
-            return <div key={i} className={`lr-block lr-h${lvl}`} style={style}>{String(b.text ?? "")}</div>;
-          }
-          if (b?.type === "table") {
-            return (
-              <table key={i} className="lr-block lr-doc-table" style={style}>
-                <thead><tr>{(b.headers ?? []).map((h: any, j: number) => <th key={j}>{String(h)}</th>)}</tr></thead>
-                <tbody>{(b.rows ?? []).slice(0, 30).map((r: any[], j: number) => (
-                  <tr key={j}>{(r ?? []).map((c, k) => <td key={k}>{String(c)}</td>)}</tr>
-                ))}</tbody>
-              </table>
-            );
-          }
-          return <p key={i} className="lr-block lr-p" style={style}>{String(b?.text ?? "")}</p>;
-        })}
+        {args?.header && <div className="lr-doc-hf">{String(args.header)}</div>}
+        <DocBlocks blocks={blocks} />
+        {foot && <div className="lr-doc-hf lr-doc-footer">{foot}</div>}
       </div>
+    </div>
+  );
+}
+
+function fmtWords(o: any): string {
+  const w: string[] = [];
+  for (const k of ["bold", "italic", "underline", "strike"]) if (typeof o?.[k] === "boolean") w.push(o[k] ? k : `not ${k}`);
+  if (o?.color) w.push(`colour ${o.color}`);
+  if (o?.size) w.push(`${o.size} pt`);
+  if (o?.highlight) w.push(`highlight ${o.highlight}`);
+  if (o?.font) w.push(o.font);
+  if (o?.align) w.push(`align ${o.align}`);
+  if (o?.style) w.push(`style ${o.style}`);
+  return w.join(", ");
+}
+
+function where(o: any): string {
+  if (o?.after != null) return `after block ${o.after}`;
+  if (o?.before != null) return `before block ${o.before}`;
+  return `at the ${o?.at ?? "end"}`;
+}
+
+function DocOp({ o, i }: { o: any; i: number }) {
+  const q = (t: any) => `“${String(t ?? "")}”`;
+  const delay = { animationDelay: `${Math.min(i, 30) * 140}ms` };
+  switch (o?.op) {
+    case "replace_text":
+      return <li className="lr-block lr-op" style={delay}><span className="lr-op-tag">replace</span><s className="lr-op-old">{String(o.find ?? "")}</s> → <span className="lr-op-new">{String(o.replace ?? "")}</span>{o.block != null && <span className="lr-muted"> (block {o.block})</span>}</li>;
+    case "set_text":
+      return <li className="lr-block lr-op" style={delay}><span className="lr-op-tag">rewrite</span>block {o.block}: <span className="lr-op-new"><InlineMd text={o.text} /></span></li>;
+    case "insert":
+      return (
+        <li className="lr-block lr-op" style={delay}>
+          <span className="lr-op-tag add">insert</span>{where(o)}
+          <div className="lr-op-page"><DocBlocks blocks={Array.isArray(o.blocks) ? o.blocks : []} delayStep={60} /></div>
+        </li>
+      );
+    case "delete":
+      return <li className="lr-block lr-op" style={delay}><span className="lr-op-tag del">delete</span>{o.to != null && o.to !== o.block ? `blocks ${o.block}–${o.to}` : `block ${o.block}`}</li>;
+    case "delete_section":
+      return <li className="lr-block lr-op" style={delay}><span className="lr-op-tag del">delete section</span>heading block {o.block} and everything under it</li>;
+    case "format":
+      return (
+        <li className="lr-block lr-op" style={delay}>
+          <span className="lr-op-tag fmt">format</span>
+          {o.text ? q(o.text) : o.all ? "whole document" : o.to != null ? `blocks ${o.block}–${o.to}` : `block ${o.block}`}
+          {o.text && o.block != null ? ` in block ${o.block}` : ""}: <span style={runStyle({ ...o, align: undefined, size: undefined })}>{fmtWords(o)}</span>
+          {o.color && <span className="lr-swatch" style={{ background: runStyle(o).color }} />}
+        </li>
+      );
+    case "table_set_cell":
+      return <li className="lr-block lr-op" style={delay}><span className="lr-op-tag">table</span>block {o.block}, row {o.row}, col {o.col} = <span className="lr-op-new">{q(o.text)}</span></li>;
+    case "table_add_row":
+      return <li className="lr-block lr-op" style={delay}><span className="lr-op-tag add">table</span>block {o.block}: new row {Array.isArray(o.cells) ? o.cells.map(String).join(" | ") : ""}</li>;
+    case "table_delete_row":
+      return <li className="lr-block lr-op" style={delay}><span className="lr-op-tag del">table</span>block {o.block}: delete row {o.row}</li>;
+    case "set_header":
+    case "set_footer":
+      return <li className="lr-block lr-op" style={delay}><span className="lr-op-tag">{o.op === "set_header" ? "header" : "footer"}</span>{q(o.op === "set_footer" ? footerText(o) : o.text)}</li>;
+    default:
+      return <li className="lr-block lr-op" style={delay}><span className="lr-op-tag">{String(o?.op ?? "?")}</span>{JSON.stringify(o).slice(0, 120)}</li>;
+  }
+}
+
+// edit_docx: the planned changes, then what the backend confirms it changed
+function DocEditStage({ card }: { card: Card }) {
+  const ops: any[] = Array.isArray(card.args?.operations) ? card.args.operations.slice(0, 40) : [];
+  let done: string[] = [];
+  if (card.status === "ok") {
+    const m = card.preview.match(/"changes":\s*(\[[^\]]*\])/);
+    try { if (m) done = JSON.parse(m[1]); } catch { /* clipped preview */ }
+  }
+  return (
+    <div className="lr-read lr-docedit">
+      <div className="lr-read-title">✏️ {shortName(card.args?.relative_path ?? "document.docx")} <span className="lr-muted">— formatting is kept</span></div>
+      <ol className="lr-ops">{ops.map((o, i) => <DocOp key={i} o={o} i={i} />)}</ol>
+      {card.status === "waiting" && <div className="lr-amber">⏸ waiting for your approval</div>}
+      {card.status === "error" && <div className="lr-card-err">{card.preview.slice(0, 300)}</div>}
+      {card.status === "ok" && (
+        <>
+          <div className="lr-sub">Saved ✓ (a snapshot was taken first)</div>
+          {done.length > 0 && <ul className="lr-doc-done">{done.map((d, i) => <li key={i}>✓ {d}</li>)}</ul>}
+        </>
+      )}
     </div>
   );
 }
@@ -379,6 +543,7 @@ function Stage({ card, root }: { card: Card; root: string }) {
     case "edit_file": return <DiffStage key={card.id} path={a.relative_path ?? ""} oldText={String(a.old_text ?? "")} newText={String(a.new_text ?? "")} />;
     case "create_xlsx": return <SheetStage key={card.id} args={a} />;
     case "create_docx": return <DocStage key={card.id} args={a} />;
+    case "edit_docx": return <DocEditStage key={card.id} card={card} />;
     case "execute_command": return <TerminalStage key={card.id} command={String(a.command ?? "")} card={card} />;
     case "fetch_url": return <BrowserStage url={String(a.url ?? "")} card={card} />;
     case "delete_file":
@@ -405,7 +570,7 @@ function Stage({ card, root }: { card: Card; root: string }) {
       if (emailTool(card.name)) return <EmailStage card={card} />;
       if (calTool(card.name)) return <CalendarStage card={card} />;
                if (notesTool(card.name)) return <NotesStage card={card} />;
-               if (["read_file", "read_spreadsheet", "list_directory", "search_files", "get_file_metadata", "git_diff", "git_status", "git_log"].includes(card.name))
+               if (["read_file", "read_docx", "read_spreadsheet", "list_directory", "search_files", "get_file_metadata", "git_diff", "git_status", "git_log"].includes(card.name))
         return <ReadStage card={card} />;
       return <GenericStage card={card} />;
   }

@@ -65,13 +65,29 @@ pub fn dispatch_tool_call(
             let max_count = get_u32(args, "max_count", 10);
             crate::git_log_tool(ws, max_count).and_then(to_value)
         }
-                "create_docx" => crate::create_docx_tool(
+        "create_docx" => crate::create_docx_tool(
             ws,
             get_str(args, "relative_path")?,
             args.get("blocks").cloned().unwrap_or(serde_json::Value::Null),
+            get_opt_str(args, "title"),
+            get_opt_str(args, "author"),
+            args.get("subject").cloned(),
             confirmed,
         )
         .and_then(to_value),
+        "read_docx" => crate::read_docx_tool(
+            ws,
+            get_str(args, "relative_path")?,
+            args.get("start_block").and_then(|v| v.as_u64()).map(|n| n as usize),
+            args.get("max_blocks").and_then(|v| v.as_u64()).map(|n| n as usize),
+        ),
+        "edit_docx" => crate::edit_docx_tool(
+            ws,
+            get_str(args, "relative_path")?,
+            args.get("operations").cloned().unwrap_or(serde_json::Value::Null),
+            get_opt_str(args, "fingerprint"),
+            confirmed,
+        ),
         "create_xlsx" => crate::create_xlsx_tool(
             ws,
             get_str(args, "relative_path")?,
@@ -117,6 +133,8 @@ pub fn dispatch_tool_call(
         )
         .and_then(to_value),
         "open_in_default_app" => crate::open_in_default_app_tool(ws, get_str(args, "relative_path")?, confirmed).and_then(to_value),
+        "read_docx" => crate::read_docx_tool(ws, get_str(args, "relative_path")?, args.get("start_block").and_then(|v| v.as_u64()).map(|n| n as usize), args.get("max_blocks").and_then(|v| v.as_u64()).map(|n| n as usize)).and_then(to_value),
+        "edit_docx" => crate::edit_docx_tool(ws, get_str(args, "relative_path")?, args.get("operations").cloned().unwrap_or(serde_json::Value::Null), get_opt_str(args, "fingerprint"), confirmed).and_then(to_value),
         "system_info" => crate::system_info_tool(ws),
         "list_processes" => crate::list_processes_tool(ws, get_u32(args, "limit", 15)),
         "list_windows" => crate::list_windows_tool(ws).and_then(to_value),

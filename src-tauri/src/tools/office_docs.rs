@@ -1,4 +1,4 @@
-//! create_docx / create_xlsx — structured Office document writers.
+//! create_docx / create_xlsx — structured Office document writers (Word: see docx_engine.rs).
 //!
 //! Safety properties (enforced here):
 //!  - every path goes through Workspace::resolve (boundary check) and must have the right extension
@@ -6,13 +6,10 @@
 //!  - XLSX: all text is written as plain strings, NEVER as formulas (blocks formula injection)
 
 use crate::workspace::Workspace;
-use docx_rs::*;
 use rust_xlsxwriter::{Format, Workbook, XlsxError};
 use serde_json::Value;
-use std::fs;
 use std::path::Path;
 
-const MAX_BLOCKS: usize = 200;
 const MAX_ROWS: usize = 1000;
 const MAX_COLS: usize = 50;
 const MAX_CELL_CHARS: usize = 5000;
@@ -48,100 +45,10 @@ fn xe(e: XlsxError) -> String {
 
 // ---------------------------------------------------------------- DOCX
 
-pub fn create_docx(workspace: &Workspace, relative_path: &str, blocks: &Value) -> Result<(), String> {
-    let path = workspace.resolve(relative_path)?; // boundary check first, always
-    require_ext(&path, "docx")?;
-
-    let arr = blocks
-        .as_array()
-        .ok_or("'blocks' must be an array of {type, ...} objects")?;
-    if arr.is_empty() {
-        return Err("'blocks' must contain at least one block".to_string());
-    }
-    if arr.len() > MAX_BLOCKS {
-        return Err(format!("Too many blocks (max {})", MAX_BLOCKS));
-    }
-
-    let mut docx = Docx::new();
-
-    for (i, b) in arr.iter().enumerate() {
-        let kind = b.get("type").and_then(|v| v.as_str()).unwrap_or("paragraph");
-        match kind {
-            "heading" => {
-                let text = b.get("text").map(val_to_text).unwrap_or_default();
-                let level = b.get("level").and_then(|v| v.as_u64()).unwrap_or(1).clamp(1, 3);
-                let size: usize = match level {
-                    1 => 40,
-                    2 => 32,
-                    _ => 28,
-                };
-                docx = docx.add_paragraph(
-                    Paragraph::new().add_run(Run::new().add_text(text).bold().size(size)),
-                );
-            }
-            "paragraph" => {
-                let text = b.get("text").map(val_to_text).unwrap_or_default();
-                docx = docx.add_paragraph(Paragraph::new().add_run(Run::new().add_text(text)));
-            }
-            "table" => {
-                let headers = b.get("headers").and_then(|v| v.as_array());
-                let rows = b.get("rows").and_then(|v| v.as_array());
-                if headers.is_none() && rows.is_none() {
-                    return Err(format!("Block {}: a table needs 'headers' and/or 'rows'", i));
-                }
-                let make_cell = |t: String, bold: bool| {
-                    let mut r = Run::new().add_text(t);
-                    if bold {
-                        r = r.bold();
-                    }
-                    TableCell::new().add_paragraph(Paragraph::new().add_run(r))
-                };
-
-                let mut trs: Vec<TableRow> = Vec::new();
-                if let Some(h) = headers {
-                    if h.len() > MAX_COLS {
-                        return Err(format!("Block {}: too many columns (max {})", i, MAX_COLS));
-                    }
-                    trs.push(TableRow::new(
-                        h.iter().map(|c| make_cell(val_to_text(c), true)).collect(),
-                    ));
-                }
-                if let Some(rs) = rows {
-                    if rs.len() > MAX_ROWS {
-                        return Err(format!("Block {}: too many rows (max {})", i, MAX_ROWS));
-                    }
-                    for r in rs {
-                        let cells = r
-                            .as_array()
-                            .ok_or_else(|| format!("Block {}: every table row must be an array", i))?;
-                        if cells.len() > MAX_COLS {
-                            return Err(format!("Block {}: too many columns (max {})", i, MAX_COLS));
-                        }
-                        trs.push(TableRow::new(
-                            cells.iter().map(|c| make_cell(val_to_text(c), false)).collect(),
-                        ));
-                    }
-                }
-                if trs.is_empty() {
-                    return Err(format!("Block {}: table is empty", i));
-                }
-                docx = docx.add_table(Table::new(trs));
-                docx = docx.add_paragraph(Paragraph::new()); // spacing after table
-            }
-            other => {
-                return Err(format!(
-                    "Block {}: unknown type '{}' (use heading, paragraph or table)",
-                    i, other
-                ))
-            }
-        }
-    }
-
-    let file = fs::File::create(&path).map_err(|e| format!("Failed to create DOCX file: {}", e))?;
-    docx.build()
-        .pack(file)
-        .map_err(|e| format!("Failed to write DOCX content: {}", e))?;
-    Ok(())
+/// create_docx lives in docx_engine.rs (same block types as edit_docx's insert).
+/// `opts` may hold header, footer and page_numbers.
+pub fn create_docx(workspace: &Workspace, relative_path: &str, blocks: &Value, opts: &Value) -> Result<Value, String> {
+    crate::tools::docx_engine::create_docx(workspace, relative_path, blocks, opts)
 }
 
 // ---------------------------------------------------------------- XLSX

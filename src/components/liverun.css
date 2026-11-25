@@ -153,6 +153,29 @@
 .lr-doc-table th { background: #ede9fe; text-align: left; }
 .lr-doc-table th, .lr-doc-table td { border: 1px solid #c4b5fd; padding: 5px 8px; }
 
+/* Word: create_docx / edit_docx */
+.lr-title { font-size: 28px; font-weight: 400; color: #1e1b4b; margin: 0 0 14px; padding-bottom: 6px; border-bottom: 1px solid #c4b5fd; }
+.lr-doc-list { font-size: 14px; line-height: 1.5; margin: 0 0 10px; padding-left: 22px; }
+.lr-doc-img { margin: 10px 0; text-align: center; }
+.lr-doc-img-box { display: inline-block; padding: 26px 40px; border: 1px dashed #a78bfa; border-radius: 6px; background: #f3f0ff; color: #5b21b6; font-size: 13px; }
+.lr-doc-caption { font-size: 12px; font-style: italic; color: #6b6488; margin-top: 4px; }
+.lr-doc-break { margin: 14px 0; border-top: 1px dashed #a78bfa; text-align: center; font-size: 10.5px; color: #8b84ad; letter-spacing: 0.08em; text-transform: uppercase; line-height: 0; }
+.lr-doc-hf { font-size: 11px; color: #8b84ad; text-align: right; margin: -24px 0 18px; }
+.lr-doc-footer { text-align: center; margin: 22px 0 -24px; }
+.lr-ops { margin: 0; padding-left: 20px; text-align: left; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.lr-op-tag { display: inline-block; min-width: 54px; margin-right: 8px; padding: 1px 7px; border-radius: 4px; font-size: 11px; text-align: center;
+  background: rgba(59, 130, 246, 0.18); color: #93c5fd; }
+.lr-op-tag.add { background: rgba(34, 197, 94, 0.18); color: #86efac; }
+.lr-op-tag.del { background: rgba(239, 68, 68, 0.18); color: #fca5a5; }
+.lr-op-tag.fmt { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; }
+.lr-op-old { color: #fca5a5; }
+.lr-op-new { color: #86efac; }
+.lr-op-page { margin: 6px 0 2px; background: #fbfaff; color: #1f1b33; border-radius: 4px; padding: 10px 14px; font-family: Calibri, "Segoe UI", sans-serif; }
+.lr-op-page .lr-p, .lr-op-page .lr-doc-list { font-size: 13px; margin-bottom: 4px; }
+.lr-op-page ul.lr-doc-list { list-style-type: disc; }
+.lr-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-left: 6px; vertical-align: middle; border: 1px solid var(--lr-line); }
+.lr-doc-done { margin: 0; padding-left: 4px; list-style: none; text-align: left; font-size: 12.5px; color: #86efac; }
+
 .lr-terminal { background: #05040c; }
 .lr-term-body { margin: 0; padding: 12px 14px; font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; word-break: break-word;
   color: #d4d4d8; min-height: 160px; max-height: 62vh; overflow: auto; }

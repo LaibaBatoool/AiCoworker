@@ -17,6 +17,8 @@ pub mod snapshot;
 pub mod registry;
 pub mod fetch_url;
 pub mod office_docs;
+pub mod xmldom;
+pub mod docx_engine;
 pub mod archive;
 pub mod read_spreadsheet;
 pub mod pdf_pages;

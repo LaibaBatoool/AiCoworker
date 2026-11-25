@@ -1,8 +1,5 @@
 use crate::workspace::Workspace;
 use std::fs;
-use std::io::Read;
-use dotext::{Docx as DotextDocx, MsDoc};
-use docx_rs::*;
 
 pub fn edit_file(
     workspace: &Workspace,
@@ -34,37 +31,11 @@ fn edit_plain_text(path: &std::path::Path, old_text: &str, new_text: &str) -> Re
         .map_err(|e| format!("Failed to write edited file: {}", e))
 }
 
+/// Word documents: the same "exactly one match" rule, done inside the document XML so
+/// headings, bold, tables, pictures and headers survive (finding 44: the old version
+/// rebuilt the file from plain text and silently dropped all formatting).
 fn edit_docx(path: &std::path::Path, old_text: &str, new_text: &str) -> Result<(), String> {
-    // Step 1: extract existing text (dotext's Docx, for reading)
-    let mut file = DotextDocx::open(path)
-        .map_err(|e| format!("Failed to open DOCX for editing: {}", e))?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)
-        .map_err(|e| format!("Failed to read DOCX content: {}", e))?;
-
-    // Step 2: apply the find-and-replace on the extracted text
-    let updated_content = apply_unique_replace(&content, old_text, new_text)?;
-
-    // Step 3: regenerate the docx from the edited text (docx_rs's Docx, for writing)
-    // (Note: this rebuilds the document as plain paragraphs — original
-    // formatting/images are not preserved, same limitation as write_file's
-    // docx creation.)
-    let out_file = fs::File::create(path)
-        .map_err(|e| format!("Failed to recreate DOCX file: {}", e))?;
-
-    let mut docx = Docx::new(); // this is docx_rs::Docx, unambiguous now
-    for line in updated_content.lines() {
-        docx = docx.add_paragraph(Paragraph::new().add_run(Run::new().add_text(line)));
-    }
-    if updated_content.is_empty() {
-        docx = docx.add_paragraph(Paragraph::new());
-    }
-
-    docx.build()
-        .pack(out_file)
-        .map_err(|e| format!("Failed to write edited DOCX content: {}", e))?;
-
-    Ok(())
+    crate::tools::docx_engine::replace_unique_in_docx(path, old_text, new_text)
 }
 
 /// Shared logic: find old_text exactly once in content, replace it with new_text.

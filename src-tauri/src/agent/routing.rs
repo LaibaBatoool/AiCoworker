@@ -43,7 +43,7 @@ const GROUPS: &[(&str, &str, &[&str])] = &[
     // WORD "hello"' and the old list ("word", "table", "report", ...) loaded all office tools.
     ("office", "Word/Excel/PDF documents and spreadsheets", &[
         "docx", "xlsx", "xls", "csv", "pdf", "pdfs", "excel", "spreadsheet", "spreadsheets",
-        "word document", "word file", "ms word", "microsoft word", "powerpoint",
+        "word document", "word file", "word doc", "ms word", "microsoft word", "powerpoint",
     ]),
     ("web", "fetch public web pages", &["http", "www", "url", "website", "web", "webpage", "link", "online", "internet", "fetch", "download", ".com", ".org"]),
     ("archive", "zip archives", &["zip", "archive", "compress", "unzip", "extract", "tar", "7z"]),
@@ -70,7 +70,7 @@ pub fn group_of(tool: &str) -> &'static str {
         return "connections";
     }
     match tool {
-        "create_docx" | "create_xlsx" | "read_spreadsheet" | "convert_to_pdf" | "merge_pdfs" | "extract_pdf_pages" => "office",
+        "create_docx" | "read_docx" | "edit_docx" | "create_xlsx" | "read_spreadsheet" | "convert_to_pdf" | "merge_pdfs" | "extract_pdf_pages" => "office",
         "fetch_url" => "web",
         "extract_archive" | "create_archive" => "archive",
         "git_diff" | "git_status" | "git_log" | "git_commit" | "list_snapshots" | "restore_snapshot" => "git",

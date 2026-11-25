@@ -31,6 +31,7 @@ use tools::git_ops::{
 use tools::list_directory::{list_directory, DirEntry};
 use tools::move_rename::move_rename;
 use tools::office_docs::{create_docx, create_xlsx};
+use tools::docx_engine::{edit_docx, read_docx};
 use tools::open_file::{check_openable, open_in_default_app, OpenResult};
 use tools::desktop::{ClipboardContent, CloseResult, ScreenshotResult, WindowInfo};
 use tools::images::{CleanResult, ImageInfoResult, OcrResult, OrganizeResult, ResizeResult};
@@ -189,20 +190,65 @@ fn create_docx_tool(
     workspace_root: String,
     relative_path: String,
     blocks: serde_json::Value,
+    header: Option<String>,
+    footer: Option<String>,
+    page_numbers: Option<serde_json::Value>,
     confirmed: bool,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let ws = Workspace::new(&workspace_root)?;
     let action = format!("create_docx: {}", relative_path);
     checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
     snapshot_before(&ws, &action);
 
-    let result = create_docx(&ws, &relative_path, &blocks);
+    let opts = serde_json::json!({ "header": header, "footer": footer, "page_numbers": page_numbers });
+    let result = create_docx(&ws, &relative_path, &blocks, &opts);
     log_action(
         &ws,
         &PermissionTier::Mutating,
         &action,
         result.is_ok(),
-        &format!("{:?}", result),
+        &match &result { Ok(_) => "Ok".to_string(), Err(e) => e.clone() },
+    );
+    result
+}
+
+/// Safe: reads a .docx as numbered blocks for edit_docx.
+#[tauri::command]
+fn read_docx_tool(
+    workspace_root: String,
+    relative_path: String,
+    start_block: Option<usize>,
+    max_blocks: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    read_docx(&ws, &relative_path, start_block, max_blocks)
+}
+
+/// Mutating: edits a .docx in place (snapshot first, so it can be undone).
+#[tauri::command]
+fn edit_docx_tool(
+    workspace_root: String,
+    relative_path: String,
+    operations: serde_json::Value,
+    fingerprint: Option<String>,
+    confirmed: bool,
+) -> Result<serde_json::Value, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let n = operations.as_array().map(|a| a.len()).unwrap_or(0);
+    let action = format!("edit_docx: {} ({} operations)", relative_path, n);
+    checkpoint(&PermissionTier::Mutating, &action, confirmed)?;
+    snapshot_before(&ws, &action);
+
+    let result = edit_docx(&ws, &relative_path, &operations, fingerprint.as_deref());
+    log_action(
+        &ws,
+        &PermissionTier::Mutating,
+        &action,
+        result.is_ok(),
+        &match &result {
+            Ok(v) => v["changes"].as_array().map(|c| c.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("; ")).unwrap_or_default(),
+            Err(e) => e.clone(),
+        },
     );
     result
 }
@@ -1092,6 +1138,8 @@ pub fn run() {
             git_log_tool,
             fetch_url_tool,
             create_docx_tool,
+            read_docx_tool,
+            edit_docx_tool,
             create_xlsx_tool,
             extract_archive_tool,
             create_archive_tool,
