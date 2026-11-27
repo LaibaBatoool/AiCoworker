@@ -133,8 +133,6 @@ pub fn dispatch_tool_call(
         )
         .and_then(to_value),
         "open_in_default_app" => crate::open_in_default_app_tool(ws, get_str(args, "relative_path")?, confirmed).and_then(to_value),
-        "read_docx" => crate::read_docx_tool(ws, get_str(args, "relative_path")?, args.get("start_block").and_then(|v| v.as_u64()).map(|n| n as usize), args.get("max_blocks").and_then(|v| v.as_u64()).map(|n| n as usize)).and_then(to_value),
-        "edit_docx" => crate::edit_docx_tool(ws, get_str(args, "relative_path")?, args.get("operations").cloned().unwrap_or(serde_json::Value::Null), get_opt_str(args, "fingerprint"), confirmed).and_then(to_value),
         "system_info" => crate::system_info_tool(ws),
         "list_processes" => crate::list_processes_tool(ws, get_u32(args, "limit", 15)),
         "list_windows" => crate::list_windows_tool(ws).and_then(to_value),
@@ -143,6 +141,15 @@ pub fn dispatch_tool_call(
         "clipboard_write" => crate::clipboard_write_tool(ws, get_str(args, "text")?, confirmed).and_then(to_value),
         "take_screenshot" => crate::take_screenshot_tool(ws, get_u32(args, "delay_seconds", 3), confirmed).and_then(to_value),
         "image_info" => crate::image_info_tool(ws, get_str(args, "relative_path")?).and_then(to_value),
+                "generate_image" => crate::generate_image_tool(
+            ws,
+            get_str(args, "prompt")?,
+            get_opt_str(args, "relative_path"),
+            args.get("size").and_then(|v| v.as_u64()).map(|n| n as u32),
+            args.get("seed").and_then(|v| v.as_u64()),
+            confirmed,
+        )
+        .and_then(to_value),
                 "describe_image" => crate::describe_image_tool(
             ws,
             get_str(args, "relative_path")?,

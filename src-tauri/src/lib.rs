@@ -538,6 +538,29 @@ fn describe_image_tool(
     result
 }
 
+/// Privileged: the prompt is sent to an online image service (Cloudflare or Pollinations).
+#[tauri::command]
+fn generate_image_tool(
+    workspace_root: String,
+    prompt: String,
+    relative_path: Option<String>,
+    size: Option<u32>,
+    seed: Option<u64>,
+    confirmed: bool,
+) -> Result<tools::imagegen::GenResult, String> {
+    let ws = Workspace::new(&workspace_root)?;
+    let short: String = prompt.chars().take(80).collect();
+    let action = format!("generate_image: \"{}\"", short);
+    checkpoint(&PermissionTier::Privileged, &action, confirmed)?;
+    let result = tools::imagegen::generate_image(&ws, &prompt, relative_path.as_deref(), size, seed);
+    let detail = match &result {
+        Ok(r) => format!("prompt sent to {}; saved {}", r.provider, r.path),
+        Err(e) => e.clone(),
+    };
+    log_action(&ws, &PermissionTier::Privileged, &action, result.is_ok(), &detail);
+    result
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn resize_image_tool(
@@ -1160,6 +1183,7 @@ pub fn run() {
             organize_photos_tool,
             remove_photo_location_tool,
             image_thumbnail_tool,
+            generate_image_tool,
             hello_status_tool,
             set_hello_required_tool,
             git_commit_tool,

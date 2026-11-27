@@ -56,10 +56,11 @@ const GROUPS: &[(&str, &str, &[&str])] = &[
         "screen", "screenshot", "clipboard", "copied", "paste", "window", "windows", "running", "process", "processes",
         "close", "quit", "ram", "cpu", "disk space", "storage", "battery", "slow", "laptop", "computer", "my pc", "system info",
     ]),
-    ("images", "pictures: image info (size, date taken, GPS location), describe what is in pictures, describe what is in pictures, read text in pictures (OCR), resize/convert copies, sort photos into date folders, remove photo location", &[
+    ("images", "pictures: image info (size, date taken, GPS location), describe what is in pictures, generate new pictures from a prompt, read text in pictures (OCR), resize/convert copies, sort photos into date folders, remove photo location", &[
         "photo", "photos", "picture", "pictures", "image", "images", "jpg", "jpeg", "png", "webp", "heic", "resize", "thumbnail",
         "exif", "gps", "location", "camera", "album", "gallery", "ocr", "scan", "scanned", "receipt", "receipts", "handwritten",
         "describe", "caption", "what's in", "whats in", "what is in",
+        "draw", "drawing", "illustration", "artwork", "wallpaper", "logo",
     ]),
     ("connections", "external tools from connected MCP servers", &["remember", "recall", "forget", "memory", "told you", "mcp", "tool"]),
 ];
@@ -75,7 +76,7 @@ pub fn group_of(tool: &str) -> &'static str {
         "extract_archive" | "create_archive" => "archive",
         "git_diff" | "git_status" | "git_log" | "git_commit" | "list_snapshots" | "restore_snapshot" => "git",
         "open_in_default_app" => "apps",
-        "image_info" | "read_image_text" | "describe_image" | "resize_image" | "organize_photos" | "remove_photo_location" => "images",
+        "image_info" | "read_image_text" | "describe_image" | "generate_image" | "resize_image" | "organize_photos" | "remove_photo_location" => "images",
         "system_info" | "list_processes" | "list_windows" | "close_app" | "clipboard_read" | "clipboard_write" | "take_screenshot" => "desktop",
         _ => "core",
     }

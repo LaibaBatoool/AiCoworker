@@ -78,9 +78,11 @@ pub fn secret_values(content: &str) -> Vec<String> {
 fn protected_values(workspace_root: &Path) -> Vec<(String, String)> {
     let mut found = Vec::new();
     // the app's own key
-    if let Ok(k) = std::env::var("GROQ_API_KEY") {
-        if k.trim().len() >= MIN_SECRET_LEN {
-            found.push((k.trim().to_string(), "the app's API key".to_string()));
+    for var in ["GROQ_API_KEY", "CLOUDFLARE_API_TOKEN"] {
+        if let Ok(k) = std::env::var(var) {
+            if k.trim().len() >= MIN_SECRET_LEN {
+                found.push((k.trim().to_string(), "the app's API key".to_string()));
+            }
         }
     }
     let mut scanned = 0usize;
@@ -205,6 +207,11 @@ pub fn check_mcp_arguments(workspace_root: &Path, tool: &str, arguments: &Value)
     let destination = format!("MCP tool '{}'", tool);
     check_texts(workspace_root, &destination, &texts)?;
     check_path_references(workspace_root, &destination, &texts)
+}
+
+/// Check free text (e.g. a generate_image prompt) before it leaves the PC.
+pub fn check_outgoing_text(workspace_root: &Path, destination: &str, text: &str) -> Result<(), String> {
+    check_texts(workspace_root, destination, &[text.to_string()])
 }
 
 /// Check a URL before fetch_url sends it.

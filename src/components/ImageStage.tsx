@@ -16,12 +16,13 @@ export interface ImageCard {
   preview: string;
 }
 
-export const IMAGE_TOOLS = ["image_info", "read_image_text", "describe_image", "resize_image", "organize_photos", "remove_photo_location"];
+export const IMAGE_TOOLS = ["image_info", "read_image_text", "describe_image", "generate_image", "resize_image", "organize_photos", "remove_photo_location"];
 
 export function describeImage(name: string, a: any): string {
   const p = String(a?.relative_path ?? "pictures").replace(/\\/g, "/");
   switch (name) {
     case "image_info": return `Looking at ${p}`;
+    case "generate_image": return `Creating a picture: "${String(a?.prompt ?? "").slice(0, 60)}${String(a?.prompt ?? "").length > 60 ? "…" : ""}"`;
     case "describe_image": return a?.question ? `Asking about ${p}: "${a.question}"` : `Looking at what is in ${p}`;
     case "read_image_text": return a?.find ? `Looking for "${a.find}" in the text of ${p}` : `Reading the text in ${p}`;
     case "resize_image": {
@@ -35,22 +36,22 @@ export function describeImage(name: string, a: any): string {
 }
 
 export function imageIcon(name: string): string {
-  return ({ image_info: "🖼️", read_image_text: "🔎", describe_image: "👁️", resize_image: "📐", organize_photos: "🗂️", remove_photo_location: "📍" } as Record<string, string>)[name] ?? "🖼️";
+  return ({ image_info: "🖼️", read_image_text: "🔎", describe_image: "👁️", generate_image: "🎨", resize_image: "📐", organize_photos: "🗂️", remove_photo_location: "📍" } as Record<string, string>)[name] ?? "🖼️";
 }
 
 const thumbCache = new Map<string, string | null>();
 
-function Thumb({ root, path, badge }: { root: string; path: string; badge?: React.ReactNode }) {
-  const key = `${root}|${path}`;
+function Thumb({ root, path, badge, size = 160 }: { root: string; path: string; badge?: React.ReactNode; size?: number }) {
+  const key = `${root}|${path}|${size}`;
   const [src, setSrc] = useState<string | null | undefined>(thumbCache.get(key));
   useEffect(() => {
     if (thumbCache.has(key)) { setSrc(thumbCache.get(key)); return; }
     let live = true;
-    invoke<string>("image_thumbnail_tool", { workspaceRoot: root, relativePath: path, size: 160 })
+    invoke<string>("image_thumbnail_tool", { workspaceRoot: root, relativePath: path, size })
       .then((s) => { thumbCache.set(key, s); if (live) setSrc(s); })
       .catch(() => { thumbCache.set(key, null); if (live) setSrc(null); });
     return () => { live = false; };
-  }, [key, root, path]);
+  }, [key, root, path, size]);
   return (
     <div className="im-thumb">
       {src ? <img src={src} alt="" /> : <span className="im-ph">{src === null ? "🖼️" : ""}</span>}
@@ -247,11 +248,33 @@ function Describe({ card, root }: { card: ImageCard; root: string }) {
   );
 }
 
+// generate_image: the prompt while it works, then the new picture itself
+function Generate({ card, root }: { card: ImageCard; root: string }) {
+  const v = card.status === "ok" ? parse(card.preview) : null;
+  const path: string | undefined = v?.path ?? card.preview.match(/"path":"([^"]+)"/)?.[1];
+  return (
+    <div className="im-panel">
+      <div className="im-head"><span>🎨 New picture</span>{v?.provider && <span className="im-muted">{v.provider}</span>}</div>
+      <div className="im-prompt">“{String(card.args?.prompt ?? "")}”</div>
+      {card.status === "ok" && path ? (
+        <div className="im-gen im-in">
+          <Thumb root={root} path={path} size={512} />
+          <div className="im-meta">{path}{v?.width ? ` · ${v.width}×${v.height}` : ""}{v?.size_bytes ? ` · ${kb(v.size_bytes)}` : ""}</div>
+          {v?.note && <div className="im-banner">{v.note}</div>}
+        </div>
+      ) : card.status === "running" ? (
+        <div className="im-gen-wait"><div className="im-gen-shimmer" /><div className="im-meta">Painting… this takes a few seconds</div></div>
+      ) : <Banner card={card} what="the picture" />}
+    </div>
+  );
+}
+
 export default function ImageStage({ card, workspaceRoot }: { card: ImageCard; workspaceRoot: string }) {
   switch (card.name) {
     case "image_info": return <Info card={card} root={workspaceRoot} />;
     case "read_image_text": return <Ocr card={card} root={workspaceRoot} />;
     case "describe_image": return <Describe card={card} root={workspaceRoot} />;
+    case "generate_image": return <Generate card={card} root={workspaceRoot} />;
     case "resize_image": return <Resize card={card} root={workspaceRoot} />;
     case "organize_photos": return <Organize card={card} root={workspaceRoot} />;
     case "remove_photo_location": return <Clean card={card} root={workspaceRoot} />;
